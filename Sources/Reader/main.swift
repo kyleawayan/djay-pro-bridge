@@ -31,6 +31,10 @@ printError("🎧 Rendering at ~\(1000 / max(renderIntervalMs, 1))fps, polling AX
 
 let kontrolX1 = KontrolX1()
 
+// MARK: - OSC
+
+let oscSender = OSCSender(host: "127.0.0.1", port: 9001)
+
 // MARK: - Thread-safe shared state
 
 class SharedState {
@@ -47,6 +51,8 @@ class SharedState {
     private var _lastSentBeatJump1: String? = nil
     private var _lastSentBeatJump2: String? = nil
     private var _lastSentCrossfader: String? = nil
+    private var _lastSentKey: String? = nil
+    private var _lastMainDeck: Int? = nil
 
     func updateFromAX(deck1: DeckInfo, deck2: DeckInfo, crossfader: String?) {
         lock.lock()
@@ -82,6 +88,22 @@ class SharedState {
             crossfaderChanged = cf
         }
 
+        // OSC: detect main deck key changes
+        let mainKey: String?
+        switch _mainDeck {
+        case 1: mainKey = deck1.key
+        case 2: mainKey = deck2.key
+        default: mainKey = nil
+        }
+        var oscKeyChange: (rootNoteIndex: Int, scale: String)? = nil
+        if let key = mainKey, (key != _lastSentKey || _mainDeck != _lastMainDeck) {
+            if let parsed = ParsedKey.parse(key) {
+                oscKeyChange = (parsed.rootNoteIndex, parsed.scale)
+                _lastSentKey = key
+            }
+        }
+        _lastMainDeck = _mainDeck
+
         lock.unlock()
 
         for payload in midiPayloads {
@@ -91,6 +113,10 @@ class SharedState {
         if let cf = crossfaderChanged {
             kontrolX1.sendCrossfader(value: cf)
             printError("MIDI: CC 29 = \(cf)")
+        }
+        if let osc = oscKeyChange {
+            oscSender.sendKeyChange(rootNoteIndex: osc.rootNoteIndex, scale: osc.scale)
+            printError("OSC: /root-key-change \(osc.rootNoteIndex), /scale-name-change \(osc.scale)")
         }
     }
 
