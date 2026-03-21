@@ -2,6 +2,22 @@
 
 A macOS tool that reads real-time deck state from [Algoriddim djay Pro](https://www.algoriddim.com/djay-pro-mac) using the macOS Accessibility API. This only supports djay Pro on Mac.
 
+## Table of Contents
+
+- [djay Pro Bridge](#djay-pro-bridge)
+  - [Table of Contents](#table-of-contents)
+  - [Why](#why)
+  - [Setup](#setup)
+    - [Dump](#dump)
+  - [Discovering More Accessibility Elements](#discovering-more-accessibility-elements)
+  - [Time Display](#time-display)
+    - [Time availability](#time-availability)
+  - [Available Data Per Deck](#available-data-per-deck)
+    - [Readable Values](#readable-values)
+    - [Action-Only Buttons (WIP)](#action-only-buttons-wip)
+    - [Other (not per-deck)](#other-not-per-deck)
+  - [License](#license)
+
 ## Why
 
 djay Pro doesn't expose deck metadata (key, title, artist, BPM) to external software. There's no MIDI output for these values, no network protocol like Pioneer's Pro DJ Link, or any external software such as ShowKontrol for djay Pro.
@@ -16,7 +32,7 @@ The breakthrough (with some help from Claude) was discovering that macOS has Acc
 
 1. **Xcode Command Line Tools** must be installed.
 
-2. **Grant Accessibility permission** to whatever is running the build (Terminal, iTerm2, VSCode, etc.).
+2. **Grant Accessibility permission** to whatever runs the tool (Terminal, iTerm2, VSCode, etc.).
 
 3. **Run djay Pro.**
 
@@ -46,9 +62,11 @@ Deck 2 ⏸
 Options:
 
 ```bash
-swift run Reader --interval 100  # custom poll interval (ms, default 50)
+swift run Reader --interval 100  # render interval in ms (default 33, ~30fps)
 swift run Reader --log           # scrolling log output instead of TUI
 ```
+
+The reader uses two threads: a background thread polls djay Pro's accessibility tree continuously (estimated ~8fps, limited by the cost of the accessibility tree walk), while the main thread renders at the `--interval` rate. The higher render rate allows smooth interpolated deck timestamps, which is important for timecode output that can be added later.
 
 ### Dump
 
@@ -115,9 +133,54 @@ Which time values are visible depends on djay Pro's current view:
 | Timer (next to key value in app) showing remaining time | No      | Yes       |
 | Timer (next to key value in app) showing elapsed time   | Yes     | No        |
 
-Note, the timer (next to key value in app) toggle to show remaining or elapsed time is per deck—it is not global.
+Note: the timer toggle (next to the key value in the app) to show remaining or elapsed time is per deck — it is not global.
 
 When a time value isn't available, the reader shows `--:--.~-` as a placeholder with a hint to change the view.
+
+## Available Data Per Deck
+
+Everything below is read per deck (Deck 1, 2, etc.) from the accessibility tree.
+
+> **Note:** These may highly vary or depend on the specific view mode that is showing in djay Pro. This is due to the accessibility tree changing based on the view mode. These are the initial ones I found with my current configuration.
+
+### Readable Values
+
+| Element               | Role                  | Example Value                                     | Notes                                                                                                                                                                         |
+| --------------------- | --------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Title                 | AXStaticText          | `What It Sounds Like (AWAIAN Future House Remix)` |                                                                                                                                                                               |
+| Artist                | AXStaticText          | `HUNTR/X`                                         |                                                                                                                                                                               |
+| Key                   | AXButton              | `f minor`                                         |                                                                                                                                                                               |
+| BPM                   | AXButton/AXStaticText | `126.0`                                           | Value-as-label pattern                                                                                                                                                        |
+| BPM %                 | AXButton/AXStaticText | `0.0%`, `+7.3%`                                   | Value-as-label pattern                                                                                                                                                        |
+| Elapsed time          | AXButton/AXStaticText | `01:35`                                           | Availability depends on view (confirmed, see [Time availability section](#time-availability))                                                                                 |
+| Remaining time        | AXButton/AXStaticText | `-05:05`                                          | Availability depends on view (confirmed, see [Time availability section](#time-availability))                                                                                 |
+| Play / Pause          | AXButton              | `Active` / nil                                    | `Active` = playing                                                                                                                                                            |
+| Key Lock on-off       | AXButton              | `Active` / nil                                    |                                                                                                                                                                               |
+| Quantize              | AXButton              | `Active` / nil                                    |                                                                                                                                                                               |
+| Loop                  | AXButton              | `4 Beats`                                         | Current loop size                                                                                                                                                             |
+| DVS                   | AXButton              | `INT`                                             |                                                                                                                                                                               |
+| Skip Forward/Backward | AXButton              | `16 Beats`                                        | Current skip size (not confirmed, but this may depend on whether the beat jump buttons are shown — the buttons configurable next to the crossfader in non-hardware mode view) |
+| Tempo                 | AXSlider              | `0%`                                              | Slider position, not BPM                                                                                                                                                      |
+| Filter                | AXSlider              | `50%`                                             |                                                                                                                                                                               |
+| High / Mid / Low EQ   | AXSlider              | `50%`                                             |                                                                                                                                                                               |
+| Gain                  | AXSlider              | `42%`                                             |                                                                                                                                                                               |
+| Line volume           | AXSlider              | `100%`                                            |                                                                                                                                                                               |
+| FX Parameter          | AXSlider              | `80%`                                             | Per FX slot (1-3)                                                                                                                                                             |
+| FX Wet/dry            | AXSlider              | `100%`                                            | Per FX slot (1-3)                                                                                                                                                             |
+| FX Parameter name     | AXStaticText          | `0 BEAT`                                          | Per FX slot (1-3)                                                                                                                                                             |
+
+### Action-Only Buttons (WIP)
+
+These AXButton elements had no value in our test dumps, but some may expose state (e.g. `Active`) when engaged — needs further testing. For triggering actions, MIDI mapping is recommended.
+
+Sync, CUE, Set start point, Jump to start point, Loop Half, Loop Double, Pitch Bend +/-, Key shift, Mute until cue, Precue, EQ Type, Edit grid, Waveform options, Neural Mix Solo (all channels), Instant FX, Instrumental, Percussive, Acapella, Tonal, FX Enable/Sidechain/Riser/Time Travel, Slice options, Slice repeat, Pitch Cue, Cue Points, Cuepoint Range, Looping, Shows quantize options.
+
+### Other (not per-deck)
+
+| Element        | Role     | Example Value |
+| -------------- | -------- | ------------- |
+| Crossfader     | AXSlider | `50%`         |
+| External Mixer | AXButton | —             |
 
 ## License
 
