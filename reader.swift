@@ -131,5 +131,5 @@ while true {
 								lastDeck2Key = d2Key
 				}
 				
-				usleep(500_000) // 500ms
+				usleep(50_000) // 50ms
 }
