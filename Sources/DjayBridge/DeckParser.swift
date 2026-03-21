@@ -80,8 +80,16 @@ public func getDeckInfo(app: AXUIElement, deckNumber: Int) -> DeckInfo {
         else if prop.range(of: #"^[+-]?\d+\.\d+%$"#, options: .regularExpression) != nil {
             info.bpmPercent = prop
         }
+        else if lower.starts(with: "line volume,") { info.lineVolume = value }
     }
     return info
+}
+
+// MARK: - Get crossfader (global, not per-deck)
+
+public func getCrossfader(app: AXUIElement) -> String? {
+    let elements = findLabeledElements(app, prefix: "Crossfader")
+    return elements.first(where: { $0.key == "Crossfader" })?.value
 }
 
 // MARK: - Get all elements (used by Dump)

@@ -18,6 +18,7 @@ A macOS tool that reads real-time deck state from [Algoriddim djay Pro](https://
     - [Readable Values](#readable-values)
     - [Action-Only Buttons (WIP)](#action-only-buttons-wip)
     - [Other (not per-deck)](#other-not-per-deck)
+  - [References](#references)
   - [License](#license)
 
 ## Why
@@ -183,6 +184,13 @@ Sync, CUE, Set start point, Jump to start point, Loop Half, Loop Double, Pitch B
 | -------------- | -------- | ------------- |
 | Crossfader     | AXSlider | `50%`         |
 | External Mixer | AXButton | —             |
+
+## References
+
+The main deck algorithm is adapted from Pioneer DJ's sync master behavior, informed by:
+
+- [AlphaTheta Help Center: "I don't understand the conditions by which the sync master switches."](https://support.alphatheta.com/en-US/articles/4406561707801)
+- [Deep Symmetry DJ Link Ecosystem Analysis: Sync and Tempo Master](https://djl-analysis.deepsymmetry.org/djl-analysis/sync.html)
 
 ## License
 

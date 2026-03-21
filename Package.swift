@@ -20,5 +20,10 @@ let package = Package(
             dependencies: ["DjayBridge"],
             path: "Sources/Dump"
         ),
+        .testTarget(
+            name: "DjayBridgeTests",
+            dependencies: ["DjayBridge"],
+            path: "Tests/DjayBridgeTests"
+        ),
     ]
 )
