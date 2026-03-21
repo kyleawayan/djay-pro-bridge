@@ -16,25 +16,40 @@ The breakthrough (with some help from Claude) was discovering that macOS has Acc
 
 1. **Xcode Command Line Tools** must be installed.
 
-2. **Grant Accessibility permission** to whatever is running the Swift script (Terminal, iTerm2, VSCode, etc.).
+2. **Grant Accessibility permission** to whatever is running the build (Terminal, iTerm2, VSCode, etc.).
 
 3. **Run djay Pro.**
 
 4. **Run the reader:**
    ```bash
-   swift reader.swift
+   swift run Reader
    ```
 
-The script polls djay Pro and prints deck state whenever the key changes:
+The reader polls djay Pro and prints deck state whenever the key changes:
 
 ```
-❯ swift reader.swift
+❯ swift run Reader
 ✅ Found djay Pro (PID: 61275)
 🎧 Polling djay Pro every 50ms... (Ctrl+C to stop)
 [6:36:36 PM]
   Deck 1: What It Sounds Like (AWAIAN Future House Remix) by HUNTR/X, EJAE, AUDREY NUNA, REI AMI & KPop Demon Hunters Cast, AWAIAN | Key: e
   Deck 2: My Way (AWAIAN Remix) by KATSEYE, AWAIAN | Key: e flat
 ^C
+```
+
+You can set a custom poll interval (in milliseconds):
+
+```bash
+swift run Reader --interval 100
+```
+
+### Dump
+
+The dump tool outputs all discovered accessibility elements as JSON:
+
+```bash
+swift run Dump                # prints JSON to stdout
+swift run Dump > elements.json  # save to file
 ```
 
 ## Discovering More Accessibility Elements
