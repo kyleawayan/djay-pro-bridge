@@ -2,6 +2,8 @@
 
 A macOS tool that reads real-time deck state from [Algoriddim djay Pro](https://www.algoriddim.com/djay-pro-mac) using the macOS Accessibility API. This only supports djay Pro on Mac.
 
+![Terminal window showing the djay Pro Bridge TUI overlaid on top of Algoriddim djay Pro's DJ interface. The TUI displays real-time deck state for two decks, showing track title, artist, key, BPM, pitch percentage, and elapsed/remaining time with tilde-approximate tenth-of-a-second precision for each. Behind the terminal, djay Pro's track info confirm the data matches the live UI.](./thumbnail.jpg)
+
 ## Table of Contents
 
 - [djay Pro Bridge](#djay-pro-bridge)
