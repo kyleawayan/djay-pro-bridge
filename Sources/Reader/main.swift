@@ -22,6 +22,10 @@ guard checkAccessibilityPermission(djay.element) else { exit(1) }
 
 printError("🎧 Rendering at ~\(1000 / max(renderIntervalMs, 1))fps, polling AX in background... (Ctrl+C to stop)\n")
 
+// MARK: - OSC
+
+let oscSender = OSCSender(host: "127.0.0.1", port: 9001)
+
 // MARK: - Thread-safe shared state
 
 class SharedState {
@@ -35,6 +39,8 @@ class SharedState {
     private let _tracker = MainDeckTracker()
     private var _playDebounce1 = PlayStateDebouncer()
     private var _playDebounce2 = PlayStateDebouncer()
+    private var _lastSentKey: String? = nil
+    private var _lastMainDeck: Int? = nil
 
     func updateFromAX(deck1: DeckInfo, deck2: DeckInfo, crossfader: String?) {
         lock.lock()
@@ -54,6 +60,24 @@ class SharedState {
             elapsedTime: d2.elapsedTime, remainingTime: d2.remainingTime,
             isPlaying: d2.isPlaying, bpmPercent: d2.bpmPercent
         )
+
+        // Send OSC when the main deck's key changes
+        let mainKey: String?
+        switch _mainDeck {
+        case 1: mainKey = deck1.key
+        case 2: mainKey = deck2.key
+        default: mainKey = nil
+        }
+
+        if let key = mainKey, (key != _lastSentKey || _mainDeck != _lastMainDeck) {
+            if let parsed = ParsedKey.parse(key) {
+                oscSender.sendKeyChange(rootNoteIndex: parsed.rootNoteIndex, scale: parsed.scale)
+                _lastSentKey = key
+                printError("OSC: /root-key-change \(parsed.rootNoteIndex), /scale-name-change \(parsed.scale)")
+            }
+        }
+        _lastMainDeck = _mainDeck
+
         lock.unlock()
     }
 
