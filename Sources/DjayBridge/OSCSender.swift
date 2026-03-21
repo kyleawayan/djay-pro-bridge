@@ -5,19 +5,30 @@ public class OSCSender {
     private let connection: NWConnection
 
     public init(host: String, port: UInt16) {
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+            fatalError("Invalid port: \(port)")
+        }
         connection = NWConnection(
             host: NWEndpoint.Host(host),
-            port: NWEndpoint.Port(rawValue: port)!,
+            port: nwPort,
             using: .udp
         )
         connection.start(queue: DispatchQueue(label: "osc-sender"))
+    }
+
+    deinit {
+        connection.cancel()
     }
 
     public func sendKeyChange(rootNoteIndex: Int, scale: String) {
         let msg1 = oscMessage(address: "/root-key-change", intArg: Int32(rootNoteIndex))
         let msg2 = oscMessage(address: "/scale-name-change", stringArg: scale)
         let bundle = oscBundle(messages: [msg1, msg2])
-        connection.send(content: bundle, completion: .contentProcessed { _ in })
+        connection.send(content: bundle, completion: .contentProcessed { error in
+            if let error = error {
+                printError("OSCSender: failed to send bundle: \(error)")
+            }
+        })
     }
 
     // MARK: - OSC encoding
@@ -42,9 +53,9 @@ public class OSCSender {
         var data = Data()
         // Bundle header: "#bundle\0"
         data.append(oscString("#bundle"))
-        // Timetag: 1 = "immediately"
-        var timetag: UInt64 = 1
-        data.append(Data(bytes: &timetag, count: 8))
+        // Timetag: 1 = "immediately" (big-endian per OSC spec)
+        var timetag = UInt64(1).bigEndian
+        withUnsafeBytes(of: &timetag) { data.append(contentsOf: $0) }
         // Each message prefixed with its size as int32
         for msg in messages {
             data.append(oscInt32(Int32(msg.count)))

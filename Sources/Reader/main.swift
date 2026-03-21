@@ -88,18 +88,18 @@ class SharedState {
             crossfaderChanged = cf
         }
 
-        // OSC: detect main deck key changes
+        // Send OSC when the main deck's key changes
+        var oscPayload: (rootNoteIndex: Int, scale: String)? = nil
         let mainKey: String?
         switch _mainDeck {
         case 1: mainKey = deck1.key
         case 2: mainKey = deck2.key
         default: mainKey = nil
         }
-        var oscKeyChange: (rootNoteIndex: Int, scale: String)? = nil
         if let key = mainKey, (key != _lastSentKey || _mainDeck != _lastMainDeck) {
+            _lastSentKey = key
             if let parsed = ParsedKey.parse(key) {
-                oscKeyChange = (parsed.rootNoteIndex, parsed.scale)
-                _lastSentKey = key
+                oscPayload = (parsed.rootNoteIndex, parsed.scale)
             }
         }
         _lastMainDeck = _mainDeck
@@ -114,9 +114,9 @@ class SharedState {
             kontrolX1.sendCrossfader(value: cf)
             printError("MIDI: CC 29 = \(cf)")
         }
-        if let osc = oscKeyChange {
-            oscSender.sendKeyChange(rootNoteIndex: osc.rootNoteIndex, scale: osc.scale)
-            printError("OSC: /root-key-change \(osc.rootNoteIndex), /scale-name-change \(osc.scale)")
+        if let payload = oscPayload {
+            oscSender.sendKeyChange(rootNoteIndex: payload.rootNoteIndex, scale: payload.scale)
+            printError("OSC: /root-key-change \(payload.rootNoteIndex), /scale-name-change \(payload.scale)")
         }
     }
 
