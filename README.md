@@ -25,22 +25,29 @@ The breakthrough (with some help from Claude) was discovering that macOS has Acc
    swift run Reader
    ```
 
-The reader polls djay Pro and prints deck state whenever the key changes:
+The reader shows a live TUI display of deck state:
 
 ```
-❯ swift run Reader
-✅ Found djay Pro (PID: 61275)
-🎧 Polling djay Pro every 50ms... (Ctrl+C to stop)
-[6:36:36 PM]
-  Deck 1: What It Sounds Like (AWAIAN Future House Remix) by HUNTR/X, EJAE, AUDREY NUNA, REI AMI & KPop Demon Hunters Cast, AWAIAN | Key: e
-  Deck 2: My Way (AWAIAN Remix) by KATSEYE, AWAIAN | Key: e flat
-^C
+djay Pro Bridge
+
+Deck 1 ▶
+  What It Sounds Like (AWAIAN Future House Remix)
+  HUNTR/X, EJAE, AUDREY NUNA, REI AMI & KPop Demon Hunters Cast, AWAIAN
+  Key: e
+  BPM: 124.0 (0.0%) | 01:35.~4 / -05:05.~6
+
+Deck 2 ⏸
+  My Way (AWAIAN Remix)
+  KATSEYE, AWAIAN
+  Key: e flat
+  BPM: 128.0 (0.0%) | 00:00.~0 / -02:58.~0
 ```
 
-You can set a custom poll interval (in milliseconds):
+Options:
 
 ```bash
-swift run Reader --interval 100
+swift run Reader --interval 100  # custom poll interval (ms, default 50)
+swift run Reader --log           # scrolling log output instead of TUI
 ```
 
 ### Dump
@@ -75,16 +82,42 @@ djay Pro exposes a rich accessibility tree — far more than just key and title.
    djay Pro (ARApplication)
      └─ djay Pro (standard window) [NSWindow]
         └─ Decks (group) [ARMacMetalView]
-           ├─ Key, Deck 1 (button)
            ├─ Title, Deck 1 (text)
            ├─ Artist, Deck 1 (text)
+           ├─ Key, Deck 1 (button)
+           ├─ Remaining time, Deck 1 (button)
+           ├─ 124.0, Deck 1 (button)             ← BPM (value-as-label)
+           ├─ 0.0%, Deck 1 (button)              ← BPM % (value-as-label)
+           ├─ Play / Pause, Deck 1 (button)
            ├─ Waveform, Deck 1 (unknown)
-           ├─ Neural Mix Solo (3ch: Vocals), Deck 1 (button)
            ├─ ...
            └─ [Deck 2 elements follow the same pattern]
    ```
 
-Element labels consistently follow the pattern `"PropertyName, Deck N"`, which makes them straightforward to query programmatically.
+Element labels follow two patterns:
+
+1. **Standard**: `"PropertyName, Deck N"` — the label names the property, the value holds the data. E.g. `"Key, Deck 1"` has value `"e"`.
+2. **Value-as-label**: The label itself IS the data. E.g. `"124.0, Deck 1"` is the BPM number, `"0.0%, Deck 1"` is the BPM percentage. The element's value field holds something else (slider position).
+
+## Time Display
+
+The reader shows elapsed and remaining time with sub-second precision (one decimal place). Since the Accessibility API only provides whole-second `MM:SS` values, the fractional second is **interpolated** between polls using wall-clock time. Interpolated values are shown with a `~` prefix (e.g. `01:35.~4`) to indicate they are approximate.
+
+The interpolator accounts for tempo changes — if BPM% is `+3.2%`, time advances 3.2% faster than wall clock. On every poll, the interpolator **snaps to reality**: if the new AX time differs from the prediction by more than ~1 second (e.g. looping, or track jumps), it resets instantly rather than trying to smooth the difference.
+
+### Time availability
+
+Which time values are visible depends on djay Pro's current view:
+
+| View                                                    | Elapsed | Remaining |
+| ------------------------------------------------------- | ------- | --------- |
+| Jog view enabled                                        | Yes     | Yes       |
+| Timer (next to key value in app) showing remaining time | No      | Yes       |
+| Timer (next to key value in app) showing elapsed time   | Yes     | No        |
+
+Note, the timer (next to key value in app) toggle to show remaining or elapsed time is per deck—it is not global.
+
+When a time value isn't available, the reader shows `--:--.~-` as a placeholder with a hint to change the view.
 
 ## License
 

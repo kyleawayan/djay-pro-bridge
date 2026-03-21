@@ -3,11 +3,16 @@ import Foundation
 
 // MARK: - Parse arguments
 
-var intervalMs: UInt32 = 50
+var logMode = false
+var renderIntervalMs: UInt32 = 33  // ~30fps default
+
 let args = CommandLine.arguments
 if let idx = args.firstIndex(of: "--interval"), idx + 1 < args.count,
    let ms = UInt32(args[idx + 1]) {
-    intervalMs = ms
+    renderIntervalMs = ms
+}
+if args.contains("--log") {
+    logMode = true
 }
 
 // MARK: - Find djay Pro and check permissions
@@ -15,30 +20,133 @@ if let idx = args.firstIndex(of: "--interval"), idx + 1 < args.count,
 guard let djay = findDjayPro() else { exit(1) }
 guard checkAccessibilityPermission(djay.element) else { exit(1) }
 
-printError("🎧 Polling djay Pro every \(intervalMs)ms... (Ctrl+C to stop)\n")
+printError("🎧 Rendering at ~\(1000 / max(renderIntervalMs, 1))fps, polling AX in background... (Ctrl+C to stop)\n")
 
-// MARK: - Poll loop
+// MARK: - Thread-safe shared state
 
-var lastDeck1Key = ""
-var lastDeck2Key = ""
+class SharedState {
+    private let lock = NSLock()
+    private var _deck1 = DeckInfo()
+    private var _deck2 = DeckInfo()
+    private var _interp1 = TimeInterpolator()
+    private var _interp2 = TimeInterpolator()
 
-while true {
-    let deck1 = getDeckInfo(app: djay.element, deckNumber: 1)
-    let deck2 = getDeckInfo(app: djay.element, deckNumber: 2)
-
-    let d1Key = deck1.key ?? "—"
-    let d2Key = deck2.key ?? "—"
-
-    if d1Key != lastDeck1Key || d2Key != lastDeck2Key {
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        print("[\(timestamp)]")
-        print("  Deck 1: \(deck1.title ?? "—") by \(deck1.artist ?? "—") | Key: \(d1Key)")
-        print("  Deck 2: \(deck2.title ?? "—") by \(deck2.artist ?? "—") | Key: \(d2Key)")
-        print("")
-
-        lastDeck1Key = d1Key
-        lastDeck2Key = d2Key
+    func updateFromAX(deck1: DeckInfo, deck2: DeckInfo) {
+        lock.lock()
+        _deck1 = deck1
+        _deck2 = deck2
+        _interp1.update(
+            elapsedTime: deck1.elapsedTime, remainingTime: deck1.remainingTime,
+            isPlaying: deck1.isPlaying, bpmPercent: deck1.bpmPercent
+        )
+        _interp2.update(
+            elapsedTime: deck2.elapsedTime, remainingTime: deck2.remainingTime,
+            isPlaying: deck2.isPlaying, bpmPercent: deck2.bpmPercent
+        )
+        lock.unlock()
     }
 
-    usleep(intervalMs * 1000)
+    func snapshot() -> (DeckInfo, DeckInfo, Double?, Double?, Double?, Double?) {
+        lock.lock()
+        let d1 = _deck1
+        let d2 = _deck2
+        let e1 = _interp1.interpolatedElapsed()
+        let r1 = _interp1.interpolatedRemaining()
+        let e2 = _interp2.interpolatedElapsed()
+        let r2 = _interp2.interpolatedRemaining()
+        lock.unlock()
+        return (d1, d2, e1, r1, e2, r2)
+    }
+}
+
+let state = SharedState()
+
+// MARK: - AX polling thread
+
+let pollQueue = DispatchQueue(label: "ax-poll", qos: .userInitiated)
+pollQueue.async {
+    while true {
+        let deck1 = getDeckInfo(app: djay.element, deckNumber: 1)
+        let deck2 = getDeckInfo(app: djay.element, deckNumber: 2)
+        state.updateFromAX(deck1: deck1, deck2: deck2)
+        // No sleep — poll as fast as AX allows (~8fps)
+    }
+}
+
+// MARK: - SIGINT handler
+
+signal(SIGINT) { _ in
+    if !logMode {
+        print("\u{1B}[?25h", terminator: "") // show cursor
+    }
+    fflush(stdout)
+    exit(0)
+}
+
+// MARK: - Rendering helpers
+
+func formatTime(elapsed: Double?, remaining: Double?) -> String {
+    let elStr = elapsed.map { TimeInterpolator.format($0) } ?? "--:--.~-"
+    let remStr = remaining.map { TimeInterpolator.format($0, negative: true) } ?? "--:--.~-"
+    return "\(elStr) / \(remStr)"
+}
+
+func formatDeck(_ n: Int, _ deck: DeckInfo, elapsed: Double?, remaining: Double?) -> String {
+    var lines: [String] = []
+    let playIcon = deck.isPlaying ? "▶" : "⏸"
+    lines.append("Deck \(n) \(playIcon)")
+    lines.append("  \(deck.title ?? "—")")
+    lines.append("  \(deck.artist ?? "—")")
+    lines.append("  Key: \(deck.key ?? "—")")
+
+    let bpmStr = deck.bpm ?? "—"
+    let pctStr = deck.bpmPercent ?? "0.0%"
+    let timeStr = formatTime(elapsed: elapsed, remaining: remaining)
+    lines.append("  BPM: \(bpmStr) (\(pctStr)) | \(timeStr)")
+
+    if elapsed == nil && remaining == nil {
+        lines.append("  (no time available — use jog wheel view or toggle timer)")
+        lines.append("  (see README for more info)")
+    } else if elapsed == nil {
+        lines.append("  (elapsed time not available — toggle timer or use jog wheel view)")
+        lines.append("  (see README for more info)")
+    } else if remaining == nil {
+        lines.append("  (remaining time not available — toggle timer or use jog wheel view)")
+        lines.append("  (see README for more info)")
+    }
+
+    return lines.joined(separator: "\n")
+}
+
+// MARK: - Render loop (main thread)
+
+if !logMode {
+    // Clear screen, hide cursor
+    print("\u{1B}[2J\u{1B}[H\u{1B}[?25l", terminator: "")
+}
+
+while true {
+    let (deck1, deck2, e1, r1, e2, r2) = state.snapshot()
+
+    if logMode {
+        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+        let e1Str = e1.map { TimeInterpolator.format($0) } ?? "--:--.~-"
+        let r1Str = r1.map { TimeInterpolator.format($0, negative: true) } ?? "--:--.~-"
+        let e2Str = e2.map { TimeInterpolator.format($0) } ?? "--:--.~-"
+        let r2Str = r2.map { TimeInterpolator.format($0, negative: true) } ?? "--:--.~-"
+
+        print("[\(timestamp)]")
+        print("  Deck 1: \(deck1.title ?? "—") by \(deck1.artist ?? "—") | Key: \(deck1.key ?? "—") | BPM: \(deck1.bpm ?? "—") (\(deck1.bpmPercent ?? "0.0%")) | \(e1Str) / \(r1Str) | \(deck1.isPlaying ? "▶" : "⏸")")
+        print("  Deck 2: \(deck2.title ?? "—") by \(deck2.artist ?? "—") | Key: \(deck2.key ?? "—") | BPM: \(deck2.bpm ?? "—") (\(deck2.bpmPercent ?? "0.0%")) | \(e2Str) / \(r2Str) | \(deck2.isPlaying ? "▶" : "⏸")")
+        print("")
+    } else {
+        print("\u{1B}[H\u{1B}[J", terminator: "")
+        print("djay Pro Bridge\n")
+        print(formatDeck(1, deck1, elapsed: e1, remaining: r1))
+        print("")
+        print(formatDeck(2, deck2, elapsed: e2, remaining: r2))
+    }
+
+    fflush(stdout)
+    usleep(renderIntervalMs * 1000)
 }

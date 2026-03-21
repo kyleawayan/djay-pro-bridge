@@ -49,6 +49,14 @@ func findLabeledElements(_ element: AXUIElement, prefix: String, depth: Int = 0)
     return results
 }
 
+/// Extracts the property name from a label like "Key, Deck 1" → "Key"
+private func labelPrefix(_ label: String) -> String {
+    if let commaRange = label.range(of: ", Deck ") {
+        return String(label[label.startIndex..<commaRange.lowerBound])
+    }
+    return label
+}
+
 public func getDeckInfo(app: AXUIElement, deckNumber: Int) -> DeckInfo {
     let prefix = "Deck \(deckNumber)"
     let allElements = findLabeledElements(app, prefix: prefix)
@@ -56,10 +64,22 @@ public func getDeckInfo(app: AXUIElement, deckNumber: Int) -> DeckInfo {
     var info = DeckInfo()
     for (label, value) in allElements {
         let lower = label.lowercased()
+        let prop = labelPrefix(label)
+
         if lower.starts(with: "key,") { info.key = value }
         else if lower.starts(with: "title,") { info.title = value }
         else if lower.starts(with: "artist,") { info.artist = value }
-        else if lower.starts(with: "bpm") || lower.contains("tempo") { info.bpm = value }
+        else if lower.starts(with: "elapsed time,") { info.elapsedTime = value }
+        else if lower.starts(with: "remaining time,") { info.remainingTime = value }
+        else if lower.starts(with: "play /") { info.isPlaying = (value == "Active") }
+        // Value-as-label: BPM is a numeric label like "124.0, Deck 1"
+        else if prop.range(of: #"^\d+\.\d+$"#, options: .regularExpression) != nil {
+            info.bpm = prop
+        }
+        // Value-as-label: BPM% is a percentage label like "+7.3%, Deck 1" or "-2.0%, Deck 1"
+        else if prop.range(of: #"^[+-]?\d+\.\d+%$"#, options: .regularExpression) != nil {
+            info.bpmPercent = prop
+        }
     }
     return info
 }
