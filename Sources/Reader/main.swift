@@ -62,6 +62,7 @@ class SharedState {
         )
 
         // Send OSC when the main deck's key changes
+        var oscPayload: (rootNoteIndex: Int, scale: String)? = nil
         let mainKey: String?
         switch _mainDeck {
         case 1: mainKey = deck1.key
@@ -70,15 +71,19 @@ class SharedState {
         }
 
         if let key = mainKey, (key != _lastSentKey || _mainDeck != _lastMainDeck) {
+            _lastSentKey = key
             if let parsed = ParsedKey.parse(key) {
-                oscSender.sendKeyChange(rootNoteIndex: parsed.rootNoteIndex, scale: parsed.scale)
-                _lastSentKey = key
-                printError("OSC: /root-key-change \(parsed.rootNoteIndex), /scale-name-change \(parsed.scale)")
+                oscPayload = (parsed.rootNoteIndex, parsed.scale)
             }
         }
         _lastMainDeck = _mainDeck
 
         lock.unlock()
+
+        if let payload = oscPayload {
+            oscSender.sendKeyChange(rootNoteIndex: payload.rootNoteIndex, scale: payload.scale)
+            printError("OSC: /root-key-change \(payload.rootNoteIndex), /scale-name-change \(payload.scale)")
+        }
     }
 
     func snapshot() -> (DeckInfo, DeckInfo, Double?, Double?, Double?, Double?, String?, Int?) {
