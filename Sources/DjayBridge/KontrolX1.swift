@@ -20,6 +20,8 @@ public class KontrolX1 {
     private let lock = NSLock()
     private var deckPosition: [Int: Int] = [1: 5, 2: 5]  // default to "1 Beat"
     private var lastRotaryTime: [Int: CFAbsoluteTime] = [:]
+    private var crossfaderPosition: UInt8 = 64  // 0-127, default to center
+    private var lastCrossfaderTime: CFAbsoluteTime = 0
     private static let rotaryCooldown: CFAbsoluteTime = 0.5  // ignore AX corrections for 500ms after last spin
 
     public init() {
@@ -104,6 +106,27 @@ public class KontrolX1 {
         }
     }
 
+    /// Called by AX poll to sync crossfader position as CC 29 (0-127).
+    public func sendCrossfader(value: String) {
+        guard let destination else { return }
+        guard let pct = Int(value.replacingOccurrences(of: "%", with: "")) else {
+            printError("KontrolX1: unknown crossfader value: \(value)")
+            return
+        }
+        let ccValue = UInt8(min(max(pct * 127 / 100, 0), 127))
+
+        lock.lock()
+        let cooldownActive = (CFAbsoluteTimeGetCurrent() - lastCrossfaderTime) < Self.rotaryCooldown
+        if !cooldownActive {
+            crossfaderPosition = ccValue
+        }
+        lock.unlock()
+
+        if !cooldownActive {
+            sendCC(channel: 0, cc: 29, value: ccValue, to: destination)
+        }
+    }
+
     /// Called from MIDI input when rotary encoder turns.
     fileprivate func handleRotary(cc: UInt8, direction: Int) {
         guard let destination else { return }
@@ -126,6 +149,19 @@ public class KontrolX1 {
         let entry = Self.beatJumpOrder[next]
         sendCC(channel: 0, cc: cc, value: entry.cc, to: destination)
         printError("KontrolX1: rotary deck \(deck) → \(entry.label) (predicted)")
+    }
+
+    /// Called from MIDI input when crossfader moves (absolute 0-127).
+    fileprivate func handleCrossfader(value: UInt8) {
+        guard let destination else { return }
+
+        lock.lock()
+        crossfaderPosition = value
+        lastCrossfaderTime = CFAbsoluteTimeGetCurrent()
+        lock.unlock()
+
+        sendCC(channel: 0, cc: 29, value: value, to: destination)
+        printError("KontrolX1: crossfader → \(value)")
     }
 
     // MARK: - Helpers
@@ -162,10 +198,14 @@ private func midiReadCallback(packetList: UnsafePointer<MIDIPacketList>, refCon:
             let cc = bytes[1]
             let val = bytes[2]
             // CC message on channel 0
-            if status == 0xB0, (cc == 24 || cc == 25) {
-                let direction = val == 0x01 ? 1 : (val == 0x7F ? -1 : 0)
-                if direction != 0 {
-                    controller.handleRotary(cc: cc, direction: direction)
+            if status == 0xB0 {
+                if cc == 24 || cc == 25 {
+                    let direction = val == 0x01 ? 1 : (val == 0x7F ? -1 : 0)
+                    if direction != 0 {
+                        controller.handleRotary(cc: cc, direction: direction)
+                    }
+                } else if cc == 29 {
+                    controller.handleCrossfader(value: val)
                 }
             }
         }
