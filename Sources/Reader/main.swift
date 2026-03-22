@@ -22,6 +22,10 @@ guard checkAccessibilityPermission(djay.element) else { exit(1) }
 
 printError("🎧 Rendering at ~\(1000 / max(renderIntervalMs, 1))fps, polling AX in background... (Ctrl+C to stop)\n")
 
+// MARK: - MIDI
+
+let kontrolX1 = KontrolX1()
+
 // MARK: - Thread-safe shared state
 
 class SharedState {
@@ -35,6 +39,8 @@ class SharedState {
     private let _tracker = MainDeckTracker()
     private var _playDebounce1 = PlayStateDebouncer()
     private var _playDebounce2 = PlayStateDebouncer()
+    private var _lastSentBeatJump1: String? = nil
+    private var _lastSentBeatJump2: String? = nil
 
     func updateFromAX(deck1: DeckInfo, deck2: DeckInfo, crossfader: String?) {
         lock.lock()
@@ -54,7 +60,23 @@ class SharedState {
             elapsedTime: d2.elapsedTime, remainingTime: d2.remainingTime,
             isPlaying: d2.isPlaying, bpmPercent: d2.bpmPercent
         )
+
+        var midiPayloads: [(deck: Int, value: String)] = []
+        if deck1.beatJump != _lastSentBeatJump1, let bj = deck1.beatJump {
+            _lastSentBeatJump1 = bj
+            midiPayloads.append((deck: 1, value: bj))
+        }
+        if deck2.beatJump != _lastSentBeatJump2, let bj = deck2.beatJump {
+            _lastSentBeatJump2 = bj
+            midiPayloads.append((deck: 2, value: bj))
+        }
+
         lock.unlock()
+
+        for payload in midiPayloads {
+            kontrolX1.sendBeatJump(deck: payload.deck, value: payload.value)
+            printError("MIDI: CC \(payload.deck == 1 ? 24 : 25) = \(payload.value)")
+        }
     }
 
     func snapshot() -> (DeckInfo, DeckInfo, Double?, Double?, Double?, Double?, String?, Int?) {
