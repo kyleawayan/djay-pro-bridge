@@ -41,6 +41,7 @@ class SharedState {
     private var _playDebounce2 = PlayStateDebouncer()
     private var _lastSentBeatJump1: String? = nil
     private var _lastSentBeatJump2: String? = nil
+    private var _lastSentCrossfader: String? = nil
 
     func updateFromAX(deck1: DeckInfo, deck2: DeckInfo, crossfader: String?) {
         lock.lock()
@@ -70,12 +71,21 @@ class SharedState {
             _lastSentBeatJump2 = bj
             midiPayloads.append((deck: 2, value: bj))
         }
+        var crossfaderChanged: String? = nil
+        if crossfader != _lastSentCrossfader, let cf = crossfader {
+            _lastSentCrossfader = cf
+            crossfaderChanged = cf
+        }
 
         lock.unlock()
 
         for payload in midiPayloads {
             kontrolX1.sendBeatJump(deck: payload.deck, value: payload.value)
             printError("MIDI: CC \(payload.deck == 1 ? 24 : 25) = \(payload.value)")
+        }
+        if let cf = crossfaderChanged {
+            kontrolX1.sendCrossfader(value: cf)
+            printError("MIDI: CC 29 = \(cf)")
         }
     }
 
