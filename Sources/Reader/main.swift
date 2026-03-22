@@ -83,7 +83,7 @@ pollQueue.async {
         let deck2 = getDeckInfo(app: djay.element, deckNumber: 2)
         let crossfader = getCrossfader(app: djay.element)
         state.updateFromAX(deck1: deck1, deck2: deck2, crossfader: crossfader)
-        // No sleep — poll as fast as AX allows (~8fps)
+        usleep(50_000) // 50ms backoff to avoid overwhelming AX API over long sessions
     }
 }
 
