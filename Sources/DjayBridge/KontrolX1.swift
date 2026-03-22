@@ -22,7 +22,10 @@ public class KontrolX1 {
     private var lastRotaryTime: [Int: CFAbsoluteTime] = [:]
     private var crossfaderPosition: UInt8 = 64  // 0-127, default to center
     private var lastCrossfaderTime: CFAbsoluteTime = 0
+    private var crossfaderBlinkOn = false
+    private var crossfaderBlinkTimer: DispatchSourceTimer?
     private static let rotaryCooldown: CFAbsoluteTime = 0.5  // ignore AX corrections for 500ms after last spin
+    private static let blinkInterval: TimeInterval = 0.3
 
     public init() {
         var status = MIDIClientCreate("DjayBridge" as CFString, nil, nil, &client)
@@ -108,7 +111,7 @@ public class KontrolX1 {
 
     /// Called by AX poll to sync crossfader position as CC 29 (0-127).
     public func sendCrossfader(value: String) {
-        guard let destination else { return }
+        guard destination != nil else { return }
         guard let pct = Int(value.replacingOccurrences(of: "%", with: "")) else {
             printError("KontrolX1: unknown crossfader value: \(value)")
             return
@@ -123,7 +126,7 @@ public class KontrolX1 {
         lock.unlock()
 
         if !cooldownActive {
-            sendCC(channel: 0, cc: 29, value: ccValue, to: destination)
+            updateCrossfaderBlink(value: ccValue)
         }
     }
 
@@ -153,15 +156,46 @@ public class KontrolX1 {
 
     /// Called from MIDI input when crossfader moves (absolute 0-127).
     fileprivate func handleCrossfader(value: UInt8) {
-        guard let destination else { return }
+        guard destination != nil else { return }
 
         lock.lock()
         crossfaderPosition = value
         lastCrossfaderTime = CFAbsoluteTimeGetCurrent()
         lock.unlock()
 
-        sendCC(channel: 0, cc: 29, value: value, to: destination)
+        updateCrossfaderBlink(value: value)
         printError("KontrolX1: crossfader → \(value)")
+    }
+
+    private func updateCrossfaderBlink(value: UInt8) {
+        guard let destination else { return }
+
+        if value == 0 || value == 127 {
+            // At extremes: stop blinking, send steady value
+            crossfaderBlinkTimer?.cancel()
+            crossfaderBlinkTimer = nil
+            sendCC(channel: 0, cc: 29, value: value, to: destination)
+        } else {
+            // Not at extreme: start blink if not already running
+            sendCC(channel: 0, cc: 29, value: value, to: destination)
+            crossfaderBlinkOn = true
+
+            if crossfaderBlinkTimer == nil {
+                let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "cf-blink"))
+                timer.schedule(deadline: .now() + Self.blinkInterval, repeating: Self.blinkInterval)
+                timer.setEventHandler { [weak self] in
+                    guard let self, let destination = self.destination else { return }
+                    self.lock.lock()
+                    self.crossfaderBlinkOn.toggle()
+                    let pos = self.crossfaderPosition
+                    let on = self.crossfaderBlinkOn
+                    self.lock.unlock()
+                    self.sendCC(channel: 0, cc: 29, value: on ? pos : 64, to: destination)
+                }
+                timer.resume()
+                crossfaderBlinkTimer = timer
+            }
+        }
     }
 
     // MARK: - Helpers
