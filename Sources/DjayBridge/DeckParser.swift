@@ -81,6 +81,7 @@ public func getDeckInfo(app: AXUIElement, deckNumber: Int) -> DeckInfo {
             info.bpmPercent = prop
         }
         else if lower.starts(with: "line volume,") { info.lineVolume = value }
+        else if lower.starts(with: "skip forward,") { info.beatJump = value }
     }
     return info
 }

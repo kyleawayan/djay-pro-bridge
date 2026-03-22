@@ -10,12 +10,13 @@ public struct DeckInfo: Codable {
     public var bpmPercent: String?
     public var isPlaying: Bool
     public var lineVolume: String?
+    public var beatJump: String?
 
     public init(
         key: String? = nil, title: String? = nil, artist: String? = nil,
         bpm: String? = nil, elapsedTime: String? = nil, remainingTime: String? = nil,
         bpmPercent: String? = nil, isPlaying: Bool = false,
-        lineVolume: String? = nil
+        lineVolume: String? = nil, beatJump: String? = nil
     ) {
         self.key = key
         self.title = title
@@ -26,6 +27,7 @@ public struct DeckInfo: Codable {
         self.bpmPercent = bpmPercent
         self.isPlaying = isPlaying
         self.lineVolume = lineVolume
+        self.beatJump = beatJump
     }
 }
 
