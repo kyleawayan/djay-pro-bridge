@@ -33,20 +33,26 @@ class SharedState {
     private var _interp1 = TimeInterpolator()
     private var _interp2 = TimeInterpolator()
     private let _tracker = MainDeckTracker()
+    private var _playDebounce1 = PlayStateDebouncer()
+    private var _playDebounce2 = PlayStateDebouncer()
 
     func updateFromAX(deck1: DeckInfo, deck2: DeckInfo, crossfader: String?) {
         lock.lock()
-        _deck1 = deck1
-        _deck2 = deck2
+        var d1 = deck1
+        var d2 = deck2
+        d1.isPlaying = _playDebounce1.update(isPlaying: deck1.isPlaying)
+        d2.isPlaying = _playDebounce2.update(isPlaying: deck2.isPlaying)
+        _deck1 = d1
+        _deck2 = d2
         _crossfader = crossfader
-        _mainDeck = _tracker.update(deck1: deck1, deck2: deck2, crossfader: crossfader)
+        _mainDeck = _tracker.update(deck1: d1, deck2: d2, crossfader: crossfader)
         _interp1.update(
-            elapsedTime: deck1.elapsedTime, remainingTime: deck1.remainingTime,
-            isPlaying: deck1.isPlaying, bpmPercent: deck1.bpmPercent
+            elapsedTime: d1.elapsedTime, remainingTime: d1.remainingTime,
+            isPlaying: d1.isPlaying, bpmPercent: d1.bpmPercent
         )
         _interp2.update(
-            elapsedTime: deck2.elapsedTime, remainingTime: deck2.remainingTime,
-            isPlaying: deck2.isPlaying, bpmPercent: deck2.bpmPercent
+            elapsedTime: d2.elapsedTime, remainingTime: d2.remainingTime,
+            isPlaying: d2.isPlaying, bpmPercent: d2.bpmPercent
         )
         lock.unlock()
     }

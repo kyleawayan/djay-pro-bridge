@@ -18,6 +18,7 @@ A macOS tool that reads real-time deck state from [Algoriddim djay Pro](https://
     - [Readable Values](#readable-values)
     - [Action-Only Buttons (WIP)](#action-only-buttons-wip)
     - [Other (not per-deck)](#other-not-per-deck)
+  - [Limitations](#limitations)
   - [References](#references)
   - [License](#license)
 
@@ -184,6 +185,11 @@ Sync, CUE, Set start point, Jump to start point, Loop Half, Loop Double, Pitch B
 | -------------- | -------- | ------------- |
 | Crossfader     | AXSlider | `50%`         |
 | External Mixer | AXButton | —             |
+
+## Limitations
+
+- **Play state detection delay (~700ms):** When a deck is paused, djay Pro's play/pause button flashes in the accessibility tree — rapidly alternating between "Active" and nil. To avoid false play detection, the reader debounces the paused-to-playing transition, requiring the button to report "Active" consistently for ~700ms before the deck is considered playing. Playing-to-paused detection is immediate.
+- **View-dependent data availability:** The accessibility tree changes based on djay Pro's current view mode. Some elements (elapsed/remaining time, beat jump buttons, etc.) may only be available in certain views.
 
 ## References
 
