@@ -87,12 +87,14 @@ if let display = serialDisplay {
     xoneK2.onModifierChanged = { isHeld in
         if isHeld {
             let (d1, d2, _, _, _, _, _, _) = state.snapshot()
-            if let b1 = d1.bpm, let b2 = d2.bpm {
-                let bpm1 = String(b1.split(separator: ".").first ?? "")
-                let bpm2 = String(b2.split(separator: ".").first ?? "")
-                let left = String(repeating: " ", count: max(0, 3 - bpm1.count)) + bpm1
-                let right = String(repeating: " ", count: max(0, 3 - bpm2.count)) + bpm2
-                display.sendOverlay("\(left)  \(right)")
+            if let p1 = d1.bpmPercent, let p2 = d2.bpmPercent {
+                let pct1 = p1.replacingOccurrences(of: "%", with: "")
+                let pct2 = p2.replacingOccurrences(of: "%", with: "")
+                let w1 = pct1.filter({ $0 != "." }).count
+                let w2 = pct2.filter({ $0 != "." }).count
+                let left = String(repeating: " ", count: max(0, 4 - w1)) + pct1
+                let right = String(repeating: " ", count: max(0, 4 - w2)) + pct2
+                display.sendOverlay("\(left)\(right)")
             }
         } else {
             display.clearOverlay()
@@ -238,14 +240,16 @@ pollQueue.async {
         let crossfader = getCrossfader(app: djay.element)
         state.updateFromAX(deck1: deck1, deck2: deck2, crossfader: crossfader)
 
-        // Update BPM overlay while modifier is held
+        // Update tempo % overlay while modifier is held
         if xoneK2.isModifierHeld, let display = serialDisplay {
-            if let b1 = deck1.bpm, let b2 = deck2.bpm {
-                let bpm1 = String(b1.split(separator: ".").first ?? "")
-                let bpm2 = String(b2.split(separator: ".").first ?? "")
-                let left = String(repeating: " ", count: max(0, 3 - bpm1.count)) + bpm1
-                let right = String(repeating: " ", count: max(0, 3 - bpm2.count)) + bpm2
-                display.sendOverlay("\(left)  \(right)")
+            if let p1 = deck1.bpmPercent, let p2 = deck2.bpmPercent {
+                let pct1 = p1.replacingOccurrences(of: "%", with: "")
+                let pct2 = p2.replacingOccurrences(of: "%", with: "")
+                let w1 = pct1.filter({ $0 != "." }).count
+                let w2 = pct2.filter({ $0 != "." }).count
+                let left = String(repeating: " ", count: max(0, 4 - w1)) + pct1
+                let right = String(repeating: " ", count: max(0, 4 - w2)) + pct2
+                display.sendOverlay("\(left)\(right)")
             }
         }
 

@@ -92,22 +92,37 @@ void renderDisplay() {
   displaySection(1, val[3]);
 }
 
-// Render overlay text: up to 8 chars, left-justified, digits only
+// Render overlay text with DP support.
+// A '.' sets the DP on the previous digit rather than consuming a position.
 void renderOverlay() {
+  // Pre-parse: build digit values and DP flags, skipping '.' chars
+  byte digits[8];
+  bool dps[8];
+  int count = 0;
   int len = strlen(overlay);
+
+  for (int i = 0; i < len && count < 8; i++) {
+    char c = overlay[i];
+    if (c == '.') {
+      // Set DP on previous digit
+      if (count > 0) dps[count - 1] = true;
+    } else {
+      digits[count] = c;
+      dps[count] = false;
+      count++;
+    }
+  }
+
   for (int i = 0; i < 8; i++) {
     int digit = 7 - i;
-    if (i < len) {
-      char c = overlay[i];
+    if (i < count) {
+      char c = digits[i];
       if (c >= '0' && c <= '9') {
-        lc.setDigit(0, digit, c - '0', false);
-      } else if (c == '.') {
-        // Set DP on previous digit (handled below)
-        lc.setChar(0, digit, ' ', false);
+        lc.setDigit(0, digit, c - '0', dps[i]);
       } else if (c == ' ') {
-        lc.setChar(0, digit, ' ', false);
+        lc.setChar(0, digit, ' ', dps[i]);
       } else {
-        lc.setChar(0, digit, c, false);
+        lc.setChar(0, digit, c, dps[i]);
       }
     } else {
       lc.setChar(0, digit, ' ', false);
