@@ -31,8 +31,23 @@ public class SerialDisplay {
         close(fd)
     }
 
-    public func send(deck1: String, deck2: String) {
-        let msg = "L\(deck1)R\(deck2)\n"
+    /// Send display state: D<bj1>,<lp1>,<lp2>,<bj2>,<l1on>,<l2on>
+    public func sendState(bj1: String, lp1: String, lp2: String, bj2: String, loop1On: Bool, loop2On: Bool) {
+        let msg = "D\(bj1),\(lp1),\(lp2),\(bj2),\(loop1On ? 1 : 0),\(loop2On ? 1 : 0)\n"
+        writeString(msg)
+    }
+
+    /// Send persistent overlay: O<text> (stays until cleared)
+    public func sendOverlay(_ text: String) {
+        writeString("O\(text)\n")
+    }
+
+    /// Clear overlay
+    public func clearOverlay() {
+        writeString("C\n")
+    }
+
+    private func writeString(_ msg: String) {
         _ = msg.utf8CString.withUnsafeBufferPointer { buf in
             write(fd, buf.baseAddress!, buf.count - 1)
         }

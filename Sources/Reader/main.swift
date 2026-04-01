@@ -34,6 +34,7 @@ printError("🎧 Rendering at ~\(1000 / max(renderIntervalMs, 1))fps, polling AX
 // MARK: - MIDI
 
 let kontrolX1 = KontrolX1()
+let xoneK2 = XoneK2WithCustomMAX7219()
 
 // MARK: - OSC
 
@@ -50,18 +51,52 @@ if let port = serialPort {
     }
 }
 
-// MARK: - Beat jump → serial display (driven by MIDI rotary input)
+// MARK: - Serial display state (driven by K2 MIDI + AX sync)
 
 if let display = serialDisplay {
-    var lastLabel: [Int: String] = [1: "1", 2: "1"]
-    let labelLock = NSLock()
-    kontrolX1.onBeatJumpChanged = { deck, label in
-        labelLock.lock()
-        lastLabel[deck] = label
-        let l = lastLabel[1] ?? "1"
-        let r = lastLabel[2] ?? "1"
-        labelLock.unlock()
-        display.send(deck1: l, deck2: r)
+    let displayLock = NSLock()
+    var bj: [Int: String] = [1: "1", 2: "1"]
+    var lp: [Int: String] = [1: "4", 2: "4"]
+    var lpOn: [Int: Bool] = [1: false, 2: false]
+
+    func sendDisplayState() {
+        display.sendState(
+            bj1: bj[1]!, lp1: lp[1]!, lp2: lp[2]!, bj2: bj[2]!,
+            loop1On: lpOn[1]!, loop2On: lpOn[2]!
+        )
+    }
+
+    xoneK2.onBeatJumpChanged = { deck, label in
+        displayLock.lock()
+        bj[deck] = label
+        displayLock.unlock()
+        sendDisplayState()
+    }
+    xoneK2.onLoopChanged = { deck, label in
+        displayLock.lock()
+        lp[deck] = label
+        displayLock.unlock()
+        sendDisplayState()
+    }
+    xoneK2.onLoopToggled = { deck, isOn in
+        displayLock.lock()
+        lpOn[deck] = isOn
+        displayLock.unlock()
+        sendDisplayState()
+    }
+    xoneK2.onModifierChanged = { isHeld in
+        if isHeld {
+            let (d1, d2, _, _, _, _, _, _) = state.snapshot()
+            if let b1 = d1.bpm, let b2 = d2.bpm {
+                let bpm1 = String(b1.split(separator: ".").first ?? "")
+                let bpm2 = String(b2.split(separator: ".").first ?? "")
+                let left = String(repeating: " ", count: max(0, 3 - bpm1.count)) + bpm1
+                let right = String(repeating: " ", count: max(0, 3 - bpm2.count)) + bpm2
+                display.sendOverlay("\(left)  \(right)")
+            }
+        } else {
+            display.clearOverlay()
+        }
     }
 }
 
@@ -112,6 +147,7 @@ class SharedState {
             _lastSentBeatJump2 = bj
             midiPayloads.append((deck: 2, value: bj))
         }
+
         var crossfaderChanged: String? = nil
         if crossfader != _lastSentCrossfader, let cf = crossfader {
             _lastSentCrossfader = cf
@@ -148,6 +184,14 @@ class SharedState {
             oscSender.sendKeyChange(rootNoteIndex: payload.rootNoteIndex, scale: payload.scale)
             printError("OSC: /root-key-change \(payload.rootNoteIndex), /scale-name-change \(payload.scale)")
         }
+
+        // Sync K2 display from AX
+        if let bj = deck1.beatJump { xoneK2.syncBeatJump(deck: 1, value: bj) }
+        if let bj = deck2.beatJump { xoneK2.syncBeatJump(deck: 2, value: bj) }
+        if let ls = deck1.loopSize { xoneK2.syncLoop(deck: 1, value: ls) }
+        if let ls = deck2.loopSize { xoneK2.syncLoop(deck: 2, value: ls) }
+        xoneK2.syncLoopActive(deck: 1, isActive: deck1.isLooping)
+        xoneK2.syncLoopActive(deck: 2, isActive: deck2.isLooping)
     }
 
     func snapshot() -> (DeckInfo, DeckInfo, Double?, Double?, Double?, Double?, String?, Int?) {
@@ -193,6 +237,18 @@ pollQueue.async {
         let deck2 = getDeckInfo(app: djay.element, deckNumber: 2)
         let crossfader = getCrossfader(app: djay.element)
         state.updateFromAX(deck1: deck1, deck2: deck2, crossfader: crossfader)
+
+        // Update BPM overlay while modifier is held
+        if xoneK2.isModifierHeld, let display = serialDisplay {
+            if let b1 = deck1.bpm, let b2 = deck2.bpm {
+                let bpm1 = String(b1.split(separator: ".").first ?? "")
+                let bpm2 = String(b2.split(separator: ".").first ?? "")
+                let left = String(repeating: " ", count: max(0, 3 - bpm1.count)) + bpm1
+                let right = String(repeating: " ", count: max(0, 3 - bpm2.count)) + bpm2
+                display.sendOverlay("\(left)  \(right)")
+            }
+        }
+
         usleep(50_000) // 50ms backoff to avoid overwhelming AX API over long sessions
     }
 }

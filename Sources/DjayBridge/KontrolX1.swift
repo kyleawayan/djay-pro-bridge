@@ -9,10 +9,6 @@ public class KontrolX1 {
 
     private static let outputDeviceName = "Traktor Kontrol X1 MK2 - 1 Output"
     private static let inputDeviceName = "Traktor Kontrol X1 MK2 - 1 Input"
-    private static let k2InputDeviceName = "XONE:K2"
-
-    /// Fired when beat jump changes from rotary input: (deck, label)
-    public var onBeatJumpChanged: ((Int, String) -> Void)?
 
     // Ordered beat jump values: 1/32 → 127
     private static let beatJumpOrder: [(label: String, cc: UInt8)] = [
@@ -23,8 +19,6 @@ public class KontrolX1 {
     // Current position in beatJumpOrder per deck (index into the array)
     private let lock = NSLock()
     private var deckPosition: [Int: Int] = [1: 5, 2: 5]  // default to "1 Beat"
-    private var rotaryAccum: [Int: Int] = [:]  // accumulated clicks per deck
-    private static let clicksPerStep = 2
     private var lastRotaryTime: [Int: CFAbsoluteTime] = [:]
     private var crossfaderPosition: UInt8 = 64  // 0-127, default to center
     private var lastCrossfaderTime: CFAbsoluteTime = 0
@@ -74,14 +68,10 @@ public class KontrolX1 {
             let endpoint = MIDIGetSource(i)
             var name: Unmanaged<CFString>?
             MIDIObjectGetStringProperty(endpoint, kMIDIPropertyName, &name)
-            if let n = name?.takeRetainedValue() as String? {
-                if n == Self.inputDeviceName {
-                    MIDIPortConnectSource(inputPort, endpoint, nil)
-                    printError("KontrolX1: listening on \(n)")
-                } else if n == Self.k2InputDeviceName {
-                    MIDIPortConnectSource(inputPort, endpoint, nil)
-                    printError("KontrolX1: listening on \(n)")
-                }
+            if let n = name?.takeRetainedValue() as String?, n == Self.inputDeviceName {
+                MIDIPortConnectSource(inputPort, endpoint, nil)
+                printError("KontrolX1: listening on \(Self.inputDeviceName)")
+                break
             }
         }
     }
@@ -92,6 +82,8 @@ public class KontrolX1 {
 
     /// Called by AX poll to sync position to reality.
     public func sendBeatJump(deck: Int, value: String) {
+        guard let destination else { return }
+
         lock.lock()
         let lastSpin = lastRotaryTime[deck] ?? 0
         lock.unlock()
@@ -102,17 +94,10 @@ public class KontrolX1 {
         // Sync our tracked position to what AX reports (only if not mid-spin)
         if !cooldownActive, let idx = Self.indexForLabel(value) {
             lock.lock()
-            let changed = deckPosition[deck] != idx
             deckPosition[deck] = idx
             lock.unlock()
-            if changed {
-                let label = Self.beatJumpOrder[idx].label
-                onBeatJumpChanged?(deck, label)
-            }
         }
 
-        // Send to X1 if connected
-        guard let destination else { return }
         let cc: UInt8 = deck == 1 ? 24 : 25
         guard let ccValue = Self.ccForLabel(value) else {
             printError("KontrolX1: unknown beat jump value: \(value)")
@@ -146,37 +131,26 @@ public class KontrolX1 {
     }
 
     /// Called from MIDI input when rotary encoder turns.
-    fileprivate func handleRotary(deck: Int, direction: Int) {
+    fileprivate func handleRotary(cc: UInt8, direction: Int) {
+        guard let destination else { return }
+
+        // CC24 = deck 1, CC25 = deck 2
+        let deck: Int
+        switch cc {
+        case 24: deck = 1
+        case 25: deck = 2
+        default: return
+        }
+
         lock.lock()
-        var accum = rotaryAccum[deck] ?? 0
-        accum += direction
-        // Direction change resets accumulator
-        if (accum > 0 && direction < 0) || (accum < 0 && direction > 0) {
-            accum = direction
-        }
-        if abs(accum) < Self.clicksPerStep {
-            rotaryAccum[deck] = accum
-            lock.unlock()
-            return
-        }
-        // Consumed enough clicks for a step
-        let step = accum > 0 ? 1 : -1
-        rotaryAccum[deck] = 0
         let current = deckPosition[deck] ?? 5
-        let next = min(max(current + step, 0), Self.beatJumpOrder.count - 1)
+        let next = min(max(current + direction, 0), Self.beatJumpOrder.count - 1)
         deckPosition[deck] = next
         lastRotaryTime[deck] = CFAbsoluteTimeGetCurrent()
         lock.unlock()
 
         let entry = Self.beatJumpOrder[next]
-
-        // Send to X1 if connected
-        if let destination {
-            let cc: UInt8 = deck == 1 ? 24 : 25
-            sendCC(channel: 0, cc: cc, value: entry.cc, to: destination)
-        }
-
-        onBeatJumpChanged?(deck, entry.label)
+        sendCC(channel: 0, cc: cc, value: entry.cc, to: destination)
         printError("KontrolX1: rotary deck \(deck) → \(entry.label) (predicted)")
     }
 
@@ -257,26 +231,15 @@ private func midiReadCallback(packetList: UnsafePointer<MIDIPacketList>, refCon:
             let status = bytes[0]
             let cc = bytes[1]
             let val = bytes[2]
-
-            // Decode relative rotary: 1-63 = CW, 65-127 = CCW
-            let direction: Int = (val >= 1 && val <= 63) ? 1 : (val >= 65 ? -1 : 0)
-
-            // X1: CC on channel 0
+            // CC message on channel 0
             if status == 0xB0 {
                 if cc == 24 || cc == 25 {
+                    let direction = val == 0x01 ? 1 : (val == 0x7F ? -1 : 0)
                     if direction != 0 {
-                        let deck = cc == 24 ? 1 : 2
-                        controller.handleRotary(deck: deck, direction: direction)
+                        controller.handleRotary(cc: cc, direction: direction)
                     }
                 } else if cc == 29 {
                     controller.handleCrossfader(value: val)
-                }
-            }
-            // K2: CC on channel 14 (0xBE)
-            if status == 0xBE {
-                if (cc == 0 || cc == 3) && direction != 0 {
-                    let deck = cc == 0 ? 1 : 2
-                    controller.handleRotary(deck: deck, direction: direction)
                 }
             }
         }

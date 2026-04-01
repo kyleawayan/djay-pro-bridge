@@ -82,6 +82,13 @@ public func getDeckInfo(app: AXUIElement, deckNumber: Int) -> DeckInfo {
         }
         else if lower.starts(with: "line volume,") { info.lineVolume = value }
         else if lower.starts(with: "skip forward,") { info.beatJump = value }
+        else if lower.starts(with: "loop,") {
+            if value == "Active" {
+                info.isLooping = true
+            } else {
+                info.loopSize = value
+            }
+        }
     }
     return info
 }
