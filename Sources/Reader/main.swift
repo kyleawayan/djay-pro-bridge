@@ -19,6 +19,10 @@ if let idx = args.firstIndex(of: "--ws-port"), idx + 1 < args.count,
 if args.contains("--log") {
     logMode = true
 }
+var serialPort: String? = nil
+if let idx = args.firstIndex(of: "--serial-port"), idx + 1 < args.count {
+    serialPort = args[idx + 1]
+}
 
 // MARK: - Find djay Pro and check permissions
 
@@ -34,6 +38,32 @@ let kontrolX1 = KontrolX1()
 // MARK: - OSC
 
 let oscSender = OSCSender(host: "127.0.0.1", port: 9001)
+
+// MARK: - Serial display
+
+let serialDisplay: SerialDisplay? = serialPort.flatMap { SerialDisplay(port: $0) }
+if let port = serialPort {
+    if serialDisplay != nil {
+        printError("📟 Serial display on \(port)")
+    } else {
+        printError("⚠️  Failed to open serial port \(port)")
+    }
+}
+
+// MARK: - Beat jump → serial display (driven by MIDI rotary input)
+
+if let display = serialDisplay {
+    var lastLabel: [Int: String] = [1: "1", 2: "1"]
+    let labelLock = NSLock()
+    kontrolX1.onBeatJumpChanged = { deck, label in
+        labelLock.lock()
+        lastLabel[deck] = label
+        let l = lastLabel[1] ?? "1"
+        let r = lastLabel[2] ?? "1"
+        labelLock.unlock()
+        display.send(deck1: l, deck2: r)
+    }
+}
 
 // MARK: - Thread-safe shared state
 
