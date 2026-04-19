@@ -261,7 +261,7 @@ pollQueue.async {
 
 signal(SIGINT) { _ in
     if !logMode {
-        print("\u{1B}[?25h", terminator: "") // show cursor
+        print("\u{1B}[?2026l\u{1B}[?25h", terminator: "") // end sync update, show cursor
     }
     fflush(stdout)
     exit(0)
@@ -329,12 +329,15 @@ while true {
         print("  Crossfader: \(crossfader ?? "—")")
         print("")
     } else {
-        print("\u{1B}[H\u{1B}[J", terminator: "")
+        // BSU: begin synchronized update (DEC mode 2026) — prevents tearing on
+        // terminals that render faster than we can write a full frame.
+        print("\u{1B}[?2026h\u{1B}[H\u{1B}[J", terminator: "")
         print("djay Pro Bridge\n")
         print(formatDeck(1, deck1, elapsed: e1, remaining: r1, isMain: mainDeck == 1))
         print("")
         print(formatDeck(2, deck2, elapsed: e2, remaining: r2, isMain: mainDeck == 2))
         print("\nCrossfader: \(crossfader ?? "—")")
+        print("\u{1B}[?2026l", terminator: "")
     }
 
     // Broadcast state over WebSocket
