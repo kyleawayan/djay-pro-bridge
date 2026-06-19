@@ -32,7 +32,6 @@ class SharedState {
     private let lock = NSLock()
     private var _deck1 = DeckInfo()
     private var _deck2 = DeckInfo()
-    private var _crossfader: String? = nil
     private var _mainDeck: Int? = nil
     private var _interp1 = TimeInterpolator()
     private var _interp2 = TimeInterpolator()
@@ -41,9 +40,10 @@ class SharedState {
     private var _playDebounce2 = PlayStateDebouncer()
     private var _lastSentBeatJump1: String? = nil
     private var _lastSentBeatJump2: String? = nil
-    private var _lastSentCrossfader: String? = nil
+    private var _lastSentTempo1: String? = nil
+    private var _lastSentTempo2: String? = nil
 
-    func updateFromAX(deck1: DeckInfo, deck2: DeckInfo, crossfader: String?) {
+    func updateFromAX(deck1: DeckInfo, deck2: DeckInfo) {
         lock.lock()
         var d1 = deck1
         var d2 = deck2
@@ -51,8 +51,7 @@ class SharedState {
         d2.isPlaying = _playDebounce2.update(isPlaying: deck2.isPlaying)
         _deck1 = d1
         _deck2 = d2
-        _crossfader = crossfader
-        _mainDeck = _tracker.update(deck1: d1, deck2: d2, crossfader: crossfader)
+        _mainDeck = _tracker.update(deck1: d1, deck2: d2)
         _interp1.update(
             elapsedTime: d1.elapsedTime, remainingTime: d1.remainingTime,
             isPlaying: d1.isPlaying, bpmPercent: d1.bpmPercent
@@ -62,34 +61,41 @@ class SharedState {
             isPlaying: d2.isPlaying, bpmPercent: d2.bpmPercent
         )
 
-        var midiPayloads: [(deck: Int, value: String)] = []
-        if deck1.beatJump != _lastSentBeatJump1, let bj = deck1.beatJump {
+        // Push beat-jump size to the displays (CC 24/25) when it changes.
+        var beatJumpPayloads: [(deck: Int, value: String)] = []
+        if let bj = deck1.beatJump, bj != _lastSentBeatJump1 {
             _lastSentBeatJump1 = bj
-            midiPayloads.append((deck: 1, value: bj))
+            beatJumpPayloads.append((deck: 1, value: bj))
         }
-        if deck2.beatJump != _lastSentBeatJump2, let bj = deck2.beatJump {
+        if let bj = deck2.beatJump, bj != _lastSentBeatJump2 {
             _lastSentBeatJump2 = bj
-            midiPayloads.append((deck: 2, value: bj))
+            beatJumpPayloads.append((deck: 2, value: bj))
         }
-        var crossfaderChanged: String? = nil
-        if crossfader != _lastSentCrossfader, let cf = crossfader {
-            _lastSentCrossfader = cf
-            crossfaderChanged = cf
+
+        // Tempo % for the shift-held display (CC 68/69), sent on change.
+        var tempoPayloads: [(deck: Int, percent: String)] = []
+        if let tp = d1.bpmPercent, tp != _lastSentTempo1 {
+            _lastSentTempo1 = tp
+            tempoPayloads.append((deck: 1, percent: tp))
+        }
+        if let tp = d2.bpmPercent, tp != _lastSentTempo2 {
+            _lastSentTempo2 = tp
+            tempoPayloads.append((deck: 2, percent: tp))
         }
 
         lock.unlock()
 
-        for payload in midiPayloads {
+        for payload in beatJumpPayloads {
             kontrolX1.sendBeatJump(deck: payload.deck, value: payload.value)
             printError("MIDI: CC \(payload.deck == 1 ? 24 : 25) = \(payload.value)")
         }
-        if let cf = crossfaderChanged {
-            kontrolX1.sendCrossfader(value: cf)
-            printError("MIDI: CC 29 = \(cf)")
+        for payload in tempoPayloads {
+            kontrolX1.setTempoPercent(deck: payload.deck, percent: payload.percent)
+            printError("MIDI: CC \(payload.deck == 1 ? 68 : 69) = \(payload.percent)")
         }
     }
 
-    func snapshot() -> (DeckInfo, DeckInfo, Double?, Double?, Double?, Double?, String?, Int?) {
+    func snapshot() -> (DeckInfo, DeckInfo, Double?, Double?, Double?, Double?, Int?) {
         lock.lock()
         let d1 = _deck1
         let d2 = _deck2
@@ -97,10 +103,9 @@ class SharedState {
         let r1 = _interp1.interpolatedRemaining()
         let e2 = _interp2.interpolatedElapsed()
         let r2 = _interp2.interpolatedRemaining()
-        let cf = _crossfader
         let main = _mainDeck
         lock.unlock()
-        return (d1, d2, e1, r1, e2, r2, cf, main)
+        return (d1, d2, e1, r1, e2, r2, main)
     }
 }
 
@@ -113,8 +118,7 @@ pollQueue.async {
     while true {
         let deck1 = getDeckInfo(app: djay.element, deckNumber: 1)
         let deck2 = getDeckInfo(app: djay.element, deckNumber: 2)
-        let crossfader = getCrossfader(app: djay.element)
-        state.updateFromAX(deck1: deck1, deck2: deck2, crossfader: crossfader)
+        state.updateFromAX(deck1: deck1, deck2: deck2)
         // No sleep — poll as fast as AX allows (~8fps)
     }
 }
@@ -175,7 +179,7 @@ if !logMode {
 }
 
 while true {
-    let (deck1, deck2, e1, r1, e2, r2, crossfader, mainDeck) = state.snapshot()
+    let (deck1, deck2, e1, r1, e2, r2, mainDeck) = state.snapshot()
 
     if logMode {
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
@@ -188,7 +192,6 @@ while true {
         print("[\(timestamp)] Main: \(mainStr)")
         print("  Deck 1: \(deck1.title ?? "—") by \(deck1.artist ?? "—") | Key: \(deck1.key ?? "—") | BPM: \(deck1.bpm ?? "—") (\(deck1.bpmPercent ?? "0.0%")) | \(e1Str) / \(r1Str) | \(deck1.isPlaying ? "▶" : "⏸") | Vol: \(deck1.lineVolume ?? "—")")
         print("  Deck 2: \(deck2.title ?? "—") by \(deck2.artist ?? "—") | Key: \(deck2.key ?? "—") | BPM: \(deck2.bpm ?? "—") (\(deck2.bpmPercent ?? "0.0%")) | \(e2Str) / \(r2Str) | \(deck2.isPlaying ? "▶" : "⏸") | Vol: \(deck2.lineVolume ?? "—")")
-        print("  Crossfader: \(crossfader ?? "—")")
         print("")
     } else {
         print("\u{1B}[H\u{1B}[J", terminator: "")
@@ -196,7 +199,6 @@ while true {
         print(formatDeck(1, deck1, elapsed: e1, remaining: r1, isMain: mainDeck == 1))
         print("")
         print(formatDeck(2, deck2, elapsed: e2, remaining: r2, isMain: mainDeck == 2))
-        print("\nCrossfader: \(crossfader ?? "—")")
     }
 
     fflush(stdout)

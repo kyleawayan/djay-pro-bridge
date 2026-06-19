@@ -86,13 +86,6 @@ public func getDeckInfo(app: AXUIElement, deckNumber: Int) -> DeckInfo {
     return info
 }
 
-// MARK: - Get crossfader (global, not per-deck)
-
-public func getCrossfader(app: AXUIElement) -> String? {
-    let elements = findLabeledElements(app, prefix: "Crossfader")
-    return elements.first(where: { $0.key == "Crossfader" })?.value
-}
-
 // MARK: - Get all elements (used by Dump)
 
 public func getAllElements(decksGroup: AXUIElement) -> [String: [ElementInfo]] {

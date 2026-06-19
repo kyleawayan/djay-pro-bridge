@@ -10,7 +10,12 @@ public class KontrolX1 {
     private static let outputDeviceName = "Traktor Kontrol X1 MK2 - 1 Output"
     private static let inputDeviceName = "Traktor Kontrol X1 MK2 - 1 Input"
 
-    // Ordered beat jump values: 1/32 → 127
+    // Shift-held display CCs: the X1 switches each display to read these while shift is held.
+    private static let tempoCCDeck1: UInt8 = 68   // left display
+    private static let tempoCCDeck2: UInt8 = 69   // right display
+
+    // Ordered beat jump values: 1/32 → 128. The X1 MK2 segment display shows the CC value
+    // verbatim, so for whole-beat sizes the value is the number itself.
     private static let beatJumpOrder: [(label: String, cc: UInt8)] = [
         ("1/32", 0), ("1/16", 116), ("1/8", 118), ("1/4", 114), ("1/2", 112),
         ("1", 1), ("2", 2), ("4", 4), ("8", 8), ("16", 16), ("32", 32), ("64", 64), ("128", 127),
@@ -20,12 +25,7 @@ public class KontrolX1 {
     private let lock = NSLock()
     private var deckPosition: [Int: Int] = [1: 5, 2: 5]  // default to "1 Beat"
     private var lastRotaryTime: [Int: CFAbsoluteTime] = [:]
-    private var crossfaderPosition: UInt8 = 64  // 0-127, default to center
-    private var lastCrossfaderTime: CFAbsoluteTime = 0
-    private var crossfaderBlinkOn = false
-    private var crossfaderBlinkTimer: DispatchSourceTimer?
     private static let rotaryCooldown: CFAbsoluteTime = 0.5  // ignore AX corrections for 500ms after last spin
-    private static let blinkInterval: TimeInterval = 0.3
 
     public init() {
         var status = MIDIClientCreate("DjayBridge" as CFString, nil, nil, &client)
@@ -80,7 +80,7 @@ public class KontrolX1 {
         MIDIClientDispose(client)
     }
 
-    /// Called by AX poll to sync position to reality.
+    /// Called by AX poll to sync the beat-jump display to reality.
     public func sendBeatJump(deck: Int, value: String) {
         guard let destination else { return }
 
@@ -109,28 +109,22 @@ public class KontrolX1 {
         }
     }
 
-    /// Called by AX poll to sync crossfader position as CC 29 (0-127).
-    public func sendCrossfader(value: String) {
-        guard destination != nil else { return }
-        guard let pct = Int(value.replacingOccurrences(of: "%", with: "")) else {
-            printError("KontrolX1: unknown crossfader value: \(value)")
+    /// Send a deck's tempo/pitch percentage to the shift-display CC (68 = deck 1 / left,
+    /// 69 = deck 2 / right). The X1 itself switches the display to these CCs while shift is
+    /// held; we just keep them current. Magnitude only — sign ignored for now.
+    public func setTempoPercent(deck: Int, percent: String) {
+        guard let destination else { return }
+        let cleaned = percent.replacingOccurrences(of: "%", with: "")
+        guard let val = Double(cleaned) else {
+            printError("KontrolX1: unknown tempo percent: \(percent)")
             return
         }
-        let ccValue = UInt8(min(max(pct * 127 / 100, 0), 127))
-
-        lock.lock()
-        let cooldownActive = (CFAbsoluteTimeGetCurrent() - lastCrossfaderTime) < Self.rotaryCooldown
-        if !cooldownActive {
-            crossfaderPosition = ccValue
-        }
-        lock.unlock()
-
-        if !cooldownActive {
-            updateCrossfaderBlink(value: ccValue)
-        }
+        let mag = UInt8(min(max(abs(val).rounded(), 0), 127))
+        let cc: UInt8 = deck == 1 ? Self.tempoCCDeck1 : Self.tempoCCDeck2
+        sendCC(channel: 0, cc: cc, value: mag, to: destination)
     }
 
-    /// Called from MIDI input when rotary encoder turns.
+    /// Called from MIDI input when the rotary encoder turns.
     fileprivate func handleRotary(cc: UInt8, direction: Int) {
         guard let destination else { return }
 
@@ -152,50 +146,6 @@ public class KontrolX1 {
         let entry = Self.beatJumpOrder[next]
         sendCC(channel: 0, cc: cc, value: entry.cc, to: destination)
         printError("KontrolX1: rotary deck \(deck) → \(entry.label) (predicted)")
-    }
-
-    /// Called from MIDI input when crossfader moves (absolute 0-127).
-    fileprivate func handleCrossfader(value: UInt8) {
-        guard destination != nil else { return }
-
-        lock.lock()
-        crossfaderPosition = value
-        lastCrossfaderTime = CFAbsoluteTimeGetCurrent()
-        lock.unlock()
-
-        updateCrossfaderBlink(value: value)
-        printError("KontrolX1: crossfader → \(value)")
-    }
-
-    private func updateCrossfaderBlink(value: UInt8) {
-        guard let destination else { return }
-
-        if value == 0 || value == 127 {
-            // At extremes: stop blinking, send steady value
-            crossfaderBlinkTimer?.cancel()
-            crossfaderBlinkTimer = nil
-            sendCC(channel: 0, cc: 29, value: value, to: destination)
-        } else {
-            // Not at extreme: start blink if not already running
-            sendCC(channel: 0, cc: 29, value: value, to: destination)
-            crossfaderBlinkOn = true
-
-            if crossfaderBlinkTimer == nil {
-                let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "cf-blink"))
-                timer.schedule(deadline: .now() + Self.blinkInterval, repeating: Self.blinkInterval)
-                timer.setEventHandler { [weak self] in
-                    guard let self, let destination = self.destination else { return }
-                    self.lock.lock()
-                    self.crossfaderBlinkOn.toggle()
-                    let pos = self.crossfaderPosition
-                    let on = self.crossfaderBlinkOn
-                    self.lock.unlock()
-                    self.sendCC(channel: 0, cc: 29, value: on ? pos : 64, to: destination)
-                }
-                timer.resume()
-                crossfaderBlinkTimer = timer
-            }
-        }
     }
 
     // MARK: - Helpers
@@ -238,8 +188,6 @@ private func midiReadCallback(packetList: UnsafePointer<MIDIPacketList>, refCon:
                     if direction != 0 {
                         controller.handleRotary(cc: cc, direction: direction)
                     }
-                } else if cc == 29 {
-                    controller.handleCrossfader(value: val)
                 }
             }
         }
