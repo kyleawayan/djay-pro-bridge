@@ -47,9 +47,11 @@ class SharedState {
     private var _lastSentBeatJump2: String? = nil
     private var _lastSentTempo1: String? = nil
     private var _lastSentTempo2: String? = nil
+    private var _crossfader: String? = nil
 
-    func updateFromAX(deck1: DeckInfo, deck2: DeckInfo) {
+    func updateFromAX(deck1: DeckInfo, deck2: DeckInfo, crossfader: String?) {
         lock.lock()
+        _crossfader = crossfader
         var d1 = deck1
         var d2 = deck2
         d1.isPlaying = _playDebounce1.update(isPlaying: deck1.isPlaying)
@@ -100,7 +102,7 @@ class SharedState {
         }
     }
 
-    func snapshot() -> (DeckInfo, DeckInfo, Double?, Double?, Double?, Double?, Int?) {
+    func snapshot() -> (DeckInfo, DeckInfo, Double?, Double?, Double?, Double?, Int?, String?) {
         lock.lock()
         let d1 = _deck1
         let d2 = _deck2
@@ -109,8 +111,9 @@ class SharedState {
         let e2 = _interp2.interpolatedElapsed()
         let r2 = _interp2.interpolatedRemaining()
         let main = _mainDeck
+        let xf = _crossfader
         lock.unlock()
-        return (d1, d2, e1, r1, e2, r2, main)
+        return (d1, d2, e1, r1, e2, r2, main, xf)
     }
 }
 
@@ -140,7 +143,8 @@ pollQueue.async {
     while true {
         let deck1 = getDeckInfo(app: djay.element, deckNumber: 1)
         let deck2 = getDeckInfo(app: djay.element, deckNumber: 2)
-        state.updateFromAX(deck1: deck1, deck2: deck2)
+        let crossfader = getCrossfader(app: djay.element)
+        state.updateFromAX(deck1: deck1, deck2: deck2, crossfader: crossfader)
         // No sleep — poll as fast as AX allows (~8fps)
     }
 }
@@ -201,7 +205,7 @@ if !logMode {
 }
 
 while true {
-    let (deck1, deck2, e1, r1, e2, r2, mainDeck) = state.snapshot()
+    let (deck1, deck2, e1, r1, e2, r2, mainDeck, crossfader) = state.snapshot()
 
     if logMode {
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
