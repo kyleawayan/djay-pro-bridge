@@ -68,6 +68,7 @@ public class KontrolX1 {
     private var syncHeld: [Int: Bool] = [1: false, 2: false]
     private var syncPressTime: [Int: CFAbsoluteTime] = [:]
     private var lastTempoMag: [Int: UInt8] = [:]   // cached BPM % magnitude per deck
+    private var lastTempoSign: [Int: Int] = [:]    // cached tempo sign (-1/0/+1) per deck
     private static let syncTapThreshold: CFAbsoluteTime = 0.25  // ≤ this = a tap (normal sync)
     // X1 SYNC button notes (bpmSync) and the CCs we emit for speedRelative in sync mode.
     private static let syncNotes: [Int: UInt8] = [1: 40, 2: 41]
@@ -151,11 +152,13 @@ public class KontrolX1 {
     public func setTempoPercent(deck: Int, percent: String) {
         guard let val = Double(percent.replacingOccurrences(of: "%", with: "")) else { return }
         let mag = UInt8(min(max(abs(val).rounded(), 0), 127))
+        let sign = val > 0 ? 1 : (val < 0 ? -1 : 0)
         lock.lock()
         lastTempoMag[deck] = mag
+        lastTempoSign[deck] = sign
         let synced = (syncHeld[1] ?? false) || (syncHeld[2] ?? false)
         lock.unlock()
-        if synced { sendDigit(deck, mag) }
+        if synced { sendDigit(deck, mag); showTempoSignOnFX(deck: deck) }
     }
 
     // MARK: - Proxy
@@ -219,6 +222,8 @@ public class KontrolX1 {
         syncPressTime[deck] = CFAbsoluteTimeGetCurrent()
         lock.unlock()
         showBpmOnBothDigits()
+        showTempoSignOnFX(deck: 1)  // FX buttons show +/- (suspends any railroad blink)
+        showTempoSignOnFX(deck: 2)
     }
 
     private func handleSyncRelease(deck: Int) {
@@ -231,8 +236,27 @@ public class KontrolX1 {
         if tap, let note = Self.syncNotes[deck] {
             emitToDjay([0x90, note, 127]); emitToDjay([0x90, note, 0])
         }
-        // Last SYNC released → restore both beat-jump digits.
-        if !stillActive { restoreBeatJumpOnBothDigits() }
+        // Last SYNC released → restore digits, and the FX buttons (railroad if looping, else off).
+        if !stillActive {
+            restoreBeatJumpOnBothDigits()
+            for d in [1, 2] {
+                if isLoopActive(d) {
+                    lock.lock(); let f = flashOn; lock.unlock()
+                    sendFlashFrame(deck: d, on: f)
+                } else {
+                    turnOffLoopFlashLEDs(deck: d)
+                }
+            }
+        }
+    }
+
+    /// While sync is held, the FX buttons show the tempo sign: left LED = negative, right =
+    /// positive, both off at 0%.
+    private func showTempoSignOnFX(deck: Int) {
+        guard let x1Output, let leds = Self.loopFlashLEDs[deck] else { return }
+        lock.lock(); let sign = lastTempoSign[deck] ?? 0; lock.unlock()
+        for n in leds.a { send([0x90, n, sign < 0 ? 127 : 0], to: x1Output) }  // left = negative
+        for n in leds.b { send([0x90, n, sign > 0 ? 127 : 0], to: x1Output) }  // right = positive
     }
 
     private func showBpmOnBothDigits() {
@@ -317,7 +341,7 @@ public class KontrolX1 {
         if let x1Output { send([0x90, deck == 1 ? 26 : 27, on ? 127 : 0], to: x1Output) }  // X1 loop LED
         if on {
             startFlashTimer()
-            sendFlashFrame(deck: deck, on: f)  // instant first frame — no 300ms wait
+            if !syncModeActive() { sendFlashFrame(deck: deck, on: f) }  // sync shows the sign instead
         } else {
             turnOffLoopFlashLEDs(deck: deck)
             if !syncModeActive() { sendDigit(deck, Self.beatJumpOrder[idx].cc) }
@@ -332,6 +356,7 @@ public class KontrolX1 {
     }
 
     private func flashTick() {
+        if syncModeActive() { return }  // sync-hold shows the tempo sign on the FX buttons instead
         lock.lock(); flashOn.toggle(); let on = flashOn; let active = loopActive; lock.unlock()
         for deck in [1, 2] where active[deck] == true { sendFlashFrame(deck: deck, on: on) }
     }
@@ -372,8 +397,10 @@ public class KontrolX1 {
         // While a loop is active the bridge owns the FX-flash LEDs — drop djay's feedback on
         // them so it doesn't fight the railroad blink.
         if status == 0x90 || status == 0x80, Self.loopFlashNotes.contains(bytes[1]) {
-            lock.lock(); let anyLoop = loopActive.values.contains(true); lock.unlock()
-            if anyLoop { return }
+            lock.lock()
+            let owned = loopActive.values.contains(true) || (syncHeld[1] ?? false) || (syncHeld[2] ?? false)
+            lock.unlock()
+            if owned { return }  // bridge owns these LEDs (railroad blink / tempo sign)
         }
         // Don't clobber the displays the bridge owns.
         if status == 0xB0, Self.ownedDisplayCCs.contains(bytes[1]) { return }
