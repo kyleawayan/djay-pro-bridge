@@ -24,8 +24,7 @@ public class KontrolX1 {
     private static let virtualDestID: Int32 = 0x1D1A0002
 
     // Display CCs the bridge generates itself (from AX) — never forward djay's output on these.
-    private static let tempoCCDeck1: UInt8 = 68   // left display (shift)
-    private static let tempoCCDeck2: UInt8 = 69   // right display (shift)
+    // 24/25 = main digit, 68/69 = shift display (mirrors the main one).
     private static let ownedDisplayCCs: Set<UInt8> = [24, 25, 68, 69]
 
     // Beat-jump label → display CC value (X1 shows the CC value verbatim).
@@ -73,6 +72,8 @@ public class KontrolX1 {
     // X1 SYNC button notes (bpmSync) and the CCs we emit for speedRelative in sync mode.
     private static let syncNotes: [Int: UInt8] = [1: 40, 2: 41]
     private static func speedRelativeCC(_ deck: Int) -> UInt8 { deck == 1 ? 70 : 71 }
+    // Loop resize: a CC the X1 never sends (bridge-driven), bound to autoLoopDurationRotary.
+    private static func autoLoopDurationCC(_ deck: Int) -> UInt8 { deck == 1 ? 72 : 73 }
     // Live state model fed by djay's MIDI-out: key (status<<8 | data1) → last value.
     private var feedbackState: [UInt16: UInt8] = [:]
 
@@ -113,9 +114,21 @@ public class KontrolX1 {
             MIDIObjectSetIntegerProperty(virtualDest, kMIDIPropertyUniqueID, Self.virtualDestID)
         }
         printError("KontrolX1: virtual port '\(Self.virtualPortName)' ready")
+        clearX1LEDs()
     }
 
-    deinit { MIDIClientDispose(client) }
+    deinit {
+        clearX1LEDs()  // leave the controller dark when the bridge stops
+        MIDIClientDispose(client)
+    }
+
+    /// Reset the X1 to a known state on startup/shutdown: all button LEDs off (djay's feedback
+    /// re-lights whatever's actually active), digits blanked.
+    private func clearX1LEDs() {
+        guard let x1Output else { return }
+        for note in UInt8(0)...127 { send([0x90, note, 0], to: x1Output) }  // all LEDs off
+        for cc: UInt8 in [24, 25, 68, 69] { send([0xB0, cc, 0], to: x1Output) }  // blank digits
+    }
 
     // MARK: - AX-driven displays (called from Reader)
 
@@ -123,27 +136,26 @@ public class KontrolX1 {
     /// encoder prediction for `rotaryCooldown` after a turn, since AX lags ~8fps and would
     /// otherwise flicker the digit back to a stale value mid-dial.
     public func sendBeatJump(deck: Int, value: String) {
-        guard let x1Output, let cc = Self.ccForLabel(value) else { return }
+        guard let cc = Self.ccForLabel(value) else { return }
         lock.lock()
         let synced = (syncHeld[1] ?? false) || (syncHeld[2] ?? false)
         let cooldown = (CFAbsoluteTimeGetCurrent() - (lastRotaryTime[deck] ?? 0)) < Self.rotaryCooldown
         if !cooldown, let idx = Self.indexForLabel(value) { deckPosition[deck] = idx }
         lock.unlock()
         if synced { return }  // sync held → digit shows BPM %
-        if !cooldown { send([0xB0, deck == 1 ? 24 : 25, cc], to: x1Output) }
+        if !cooldown { sendDigit(deck, cc) }
     }
 
-    /// Tempo/pitch % magnitude → shift display (CC 68/69) normally, or the main digit (CC 24/25)
-    /// while SYNC is held.
+    /// Tempo/pitch % magnitude — shown on the digits only while SYNC is held (otherwise the
+    /// digits show beat jump). Cached so a SYNC press can show it immediately.
     public func setTempoPercent(deck: Int, percent: String) {
-        guard let x1Output, let val = Double(percent.replacingOccurrences(of: "%", with: "")) else { return }
+        guard let val = Double(percent.replacingOccurrences(of: "%", with: "")) else { return }
         let mag = UInt8(min(max(abs(val).rounded(), 0), 127))
         lock.lock()
         lastTempoMag[deck] = mag
         let synced = (syncHeld[1] ?? false) || (syncHeld[2] ?? false)
         lock.unlock()
-        let cc: UInt8 = synced ? (deck == 1 ? 24 : 25) : (deck == 1 ? Self.tempoCCDeck1 : Self.tempoCCDeck2)
-        send([0xB0, cc, mag], to: x1Output)
+        if synced { sendDigit(deck, mag) }
     }
 
     // MARK: - Proxy
@@ -170,16 +182,13 @@ public class KontrolX1 {
                 emitToDjay([0xB0, cc, bytes[2]])
                 printError("KontrolX1: sync tempo deck \(deck) → CC \(cc) = \(bytes[2])")
             } else if isLoopActive(deck) {
-                // Loop running → resize the loop AND beat jump together. They start equal (the
-                // loop began at the beat-jump size), so coupling keeps them equal — and lets you
-                // beat-jump at the loop's size. predictBeatJumpDisplay steps the (blinked) value.
-                emitToDjay(bytes)                                  // skipDurationRotary (beat jump)
-                emitToDjay([0xB0, deck == 1 ? 68 : 69, bytes[2]])  // autoLoopDurationRotary (loop)
+                // Loop running → resize the loop AND beat jump together (they started equal, so
+                // they track). autoLoopDurationRotary lives on a bridge-only CC (72/73).
+                emitToDjay(bytes)                                          // skipDurationRotary
+                emitToDjay([0xB0, Self.autoLoopDurationCC(deck), bytes[2]])  // autoLoopDurationRotary
                 predictBeatJumpDisplay(cc: bytes[1], value: bytes[2])
             } else {
-                // Loop off → beat-jump size + snappy display. No relative loop-duration nudge;
-                // coupling happens on push (absolute per-size auto-loop).
-                emitToDjay(bytes)
+                emitToDjay(bytes)  // skipDurationRotary (beat jump)
                 predictBeatJumpDisplay(cc: bytes[1], value: bytes[2])
             }
             return
@@ -227,17 +236,15 @@ public class KontrolX1 {
     }
 
     private func showBpmOnBothDigits() {
-        guard let x1Output else { return }
         lock.lock(); let m1 = lastTempoMag[1] ?? 0; let m2 = lastTempoMag[2] ?? 0; lock.unlock()
-        send([0xB0, 24, m1], to: x1Output)
-        send([0xB0, 25, m2], to: x1Output)
+        sendDigit(1, m1)
+        sendDigit(2, m2)
     }
 
     private func restoreBeatJumpOnBothDigits() {
-        guard let x1Output else { return }
         lock.lock(); let i1 = deckPosition[1] ?? 5; let i2 = deckPosition[2] ?? 5; lock.unlock()
-        send([0xB0, 24, Self.beatJumpOrder[i1].cc], to: x1Output)
-        send([0xB0, 25, Self.beatJumpOrder[i2].cc], to: x1Output)
+        sendDigit(1, Self.beatJumpOrder[i1].cc)
+        sendDigit(2, Self.beatJumpOrder[i2].cc)
     }
 
     /// Push couples loop ↔ beat jump: fire the absolute per-size auto-loop matching the current
@@ -313,9 +320,7 @@ public class KontrolX1 {
             sendFlashFrame(deck: deck, on: f)  // instant first frame — no 300ms wait
         } else {
             turnOffLoopFlashLEDs(deck: deck)
-            if let x1Output, !syncModeActive() {
-                send([0xB0, deck == 1 ? 24 : 25, Self.beatJumpOrder[idx].cc], to: x1Output)
-            }
+            if !syncModeActive() { sendDigit(deck, Self.beatJumpOrder[idx].cc) }
             if !anyActive { stopFlashTimer() }
         }
     }
@@ -339,7 +344,6 @@ public class KontrolX1 {
     /// Snappy display: step the tracked beat-jump index on each detent and show it on CC 24/25
     /// immediately (the AX sync would lag ~8fps behind the encoder).
     private func predictBeatJumpDisplay(cc: UInt8, value: UInt8) {
-        guard let x1Output else { return }
         let direction = value == 0x01 ? 1 : (value == 0x7F ? -1 : 0)
         guard direction != 0 else { return }
         let deck = cc == 24 ? 1 : 2
@@ -348,7 +352,7 @@ public class KontrolX1 {
         deckPosition[deck] = next
         lastRotaryTime[deck] = CFAbsoluteTimeGetCurrent()
         lock.unlock()
-        send([0xB0, cc, Self.beatJumpOrder[next].cc], to: x1Output)
+        sendDigit(deck, Self.beatJumpOrder[next].cc)
     }
 
     /// djay → X1 hardware. Record state, forward LED feedback (except the bridge's display CCs).
@@ -390,6 +394,14 @@ public class KontrolX1 {
         var pkt = MIDIPacketListInit(&pl)
         pkt = MIDIPacketListAdd(&pl, MemoryLayout<MIDIPacketList>.size, pkt, 0, bytes.count, bytes)
         MIDISend(x1OutPort, endpoint, &pl)
+    }
+
+    /// Drive a deck's display digit on both the main CC (24/25) and the shift-display CC (68/69),
+    /// so the shift layer always mirrors the main one.
+    private func sendDigit(_ deck: Int, _ value: UInt8) {
+        guard let x1Output else { return }
+        send([0xB0, deck == 1 ? 24 : 25, value], to: x1Output)
+        send([0xB0, deck == 1 ? 68 : 69, value], to: x1Output)
     }
 
     private static func indexForLabel(_ value: String) -> Int? {

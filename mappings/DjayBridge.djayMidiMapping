@@ -263,18 +263,6 @@
 			<dict/>
 		</dict>
 		<dict>
-			<key>controlType</key>
-			<string>rotary</string>
-			<key>keyPath</key>
-			<string>turntable1.autoLoopDurationRotary</string>
-			<key>midiChannel</key>
-			<integer>0</integer>
-			<key>midiData</key>
-			<integer>68</integer>
-			<key>midiMessageType</key>
-			<integer>3</integer>
-		</dict>
-		<dict>
 			<key>keyPath</key>
 			<string>turntable2.echoTransitionEffect</string>
 			<key>midiChannel</key>
@@ -608,30 +596,6 @@
 		</dict>
 		<dict>
 			<key>keyPath</key>
-			<string>application.turntable1Selected</string>
-			<key>midiChannel</key>
-			<integer>0</integer>
-			<key>midiData</key>
-			<integer>62</integer>
-			<key>midiMessageType</key>
-			<integer>1</integer>
-			<key>output</key>
-			<dict/>
-		</dict>
-		<dict>
-			<key>keyPath</key>
-			<string>application.turntable2Selected</string>
-			<key>midiChannel</key>
-			<integer>0</integer>
-			<key>midiData</key>
-			<integer>63</integer>
-			<key>midiMessageType</key>
-			<integer>1</integer>
-			<key>output</key>
-			<dict/>
-		</dict>
-		<dict>
-			<key>keyPath</key>
 			<string>turntable1.echoTransitionEffect</string>
 			<key>midiChannel</key>
 			<integer>0</integer>
@@ -649,42 +613,6 @@
 			<integer>89</integer>
 			<key>midiMessageType</key>
 			<integer>1</integer>
-		</dict>
-		<dict>
-			<key>controlType</key>
-			<string>rotary</string>
-			<key>keyPath</key>
-			<string>turntableSelected.speed</string>
-			<key>midiChannel</key>
-			<integer>0</integer>
-			<key>midiData</key>
-			<integer>60</integer>
-			<key>midiMessageType</key>
-			<integer>3</integer>
-			<key>rotarySensitivity</key>
-			<real>10.0</real>
-		</dict>
-		<dict>
-			<key>keyPath</key>
-			<string>turntableSelected</string>
-			<key>midiChannel</key>
-			<integer>0</integer>
-			<key>midiData</key>
-			<integer>29</integer>
-			<key>midiMessageType</key>
-			<integer>1</integer>
-		</dict>
-		<dict>
-			<key>controlType</key>
-			<string>rotary</string>
-			<key>keyPath</key>
-			<string>turntable2.autoLoopDurationRotary</string>
-			<key>midiChannel</key>
-			<integer>0</integer>
-			<key>midiData</key>
-			<integer>69</integer>
-			<key>midiMessageType</key>
-			<integer>3</integer>
 		</dict>
 		<dict>
 			<key>keyPath</key>
@@ -997,6 +925,86 @@
 			<integer>3</integer>
 			<key>rotarySensitivity</key>
 			<real>10.0</real>
+		</dict>
+		<dict>
+			<key>controlType</key>
+			<string>rotary</string>
+			<key>keyPath</key>
+			<string>turntable2</string>
+			<key>midiChannel</key>
+			<integer>0</integer>
+			<key>midiData</key>
+			<integer>69</integer>
+			<key>midiMessageType</key>
+			<integer>3</integer>
+		</dict>
+		<dict>
+			<key>controlType</key>
+			<string>rotary</string>
+			<key>keyPath</key>
+			<string>turntable2</string>
+			<key>midiChannel</key>
+			<integer>0</integer>
+			<key>midiData</key>
+			<integer>68</integer>
+			<key>midiMessageType</key>
+			<integer>3</integer>
+		</dict>
+		<dict>
+			<key>controlType</key>
+			<string>rotary</string>
+			<key>keyPath</key>
+			<string>turntable2</string>
+			<key>midiChannel</key>
+			<integer>0</integer>
+			<key>midiData</key>
+			<integer>60</integer>
+			<key>midiMessageType</key>
+			<integer>3</integer>
+		</dict>
+		<dict>
+			<key>keyPath</key>
+			<string>turntable2</string>
+			<key>midiChannel</key>
+			<integer>0</integer>
+			<key>midiData</key>
+			<integer>63</integer>
+			<key>midiMessageType</key>
+			<integer>1</integer>
+		</dict>
+		<dict>
+			<key>keyPath</key>
+			<string>turntable2</string>
+			<key>midiChannel</key>
+			<integer>0</integer>
+			<key>midiData</key>
+			<integer>62</integer>
+			<key>midiMessageType</key>
+			<integer>1</integer>
+		</dict>
+		<dict>
+			<key>controlType</key>
+			<string>rotary</string>
+			<key>keyPath</key>
+			<string>turntable1.autoLoopDurationRotary</string>
+			<key>midiChannel</key>
+			<integer>0</integer>
+			<key>midiData</key>
+			<integer>72</integer>
+			<key>midiMessageType</key>
+			<integer>3</integer>
+		</dict>
+		<dict>
+			<key>controlType</key>
+			<string>rotary</string>
+			<key>keyPath</key>
+			<string>turntable2.autoLoopDurationRotary</string>
+			<key>midiChannel</key>
+			<integer>0</integer>
+			<key>midiData</key>
+			<integer>73</integer>
+			<key>midiMessageType</key>
+			<integer>3</integer>
 		</dict>
 	</array>
 	<key>editor</key>
