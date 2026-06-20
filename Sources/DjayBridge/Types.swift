@@ -1,6 +1,6 @@
 import Foundation
 
-public struct DeckInfo {
+public struct DeckInfo: Codable {
     public var key: String?
     public var title: String?
     public var artist: String?

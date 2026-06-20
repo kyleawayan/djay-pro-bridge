@@ -5,11 +5,16 @@ import Foundation
 
 var logMode = false
 var renderIntervalMs: UInt32 = 33  // ~30fps default
+var wsPort: UInt16 = 9090
 
 let args = CommandLine.arguments
 if let idx = args.firstIndex(of: "--interval"), idx + 1 < args.count,
    let ms = UInt32(args[idx + 1]) {
     renderIntervalMs = ms
+}
+if let idx = args.firstIndex(of: "--ws-port"), idx + 1 < args.count,
+   let p = UInt16(args[idx + 1]) {
+    wsPort = p
 }
 if args.contains("--log") {
     logMode = true
@@ -111,6 +116,23 @@ class SharedState {
 
 let state = SharedState()
 
+// MARK: - WebSocket server
+
+let wsServer = try WebSocketServer(port: wsPort)
+
+let jsonEncoder: JSONEncoder = {
+    let enc = JSONEncoder()
+    enc.keyEncodingStrategy = .convertToSnakeCase
+    return enc
+}()
+
+struct BroadcastPayload: Codable {
+    var deck1: DeckInfo
+    var deck2: DeckInfo
+    var crossfader: String?
+    var mainDeck: Int?
+}
+
 // MARK: - AX polling thread
 
 let pollQueue = DispatchQueue(label: "ax-poll", qos: .userInitiated)
@@ -199,6 +221,18 @@ while true {
         print(formatDeck(1, deck1, elapsed: e1, remaining: r1, isMain: mainDeck == 1))
         print("")
         print(formatDeck(2, deck2, elapsed: e2, remaining: r2, isMain: mainDeck == 2))
+    }
+
+    // Broadcast state over WebSocket
+    var d1ws = deck1
+    var d2ws = deck2
+    d1ws.elapsedTime = e1.map { TimeInterpolator.format($0) }
+    d1ws.remainingTime = r1.map { TimeInterpolator.format($0, negative: true) }
+    d2ws.elapsedTime = e2.map { TimeInterpolator.format($0) }
+    d2ws.remainingTime = r2.map { TimeInterpolator.format($0, negative: true) }
+    let payload = BroadcastPayload(deck1: d1ws, deck2: d2ws, crossfader: crossfader, mainDeck: mainDeck)
+    if let data = try? jsonEncoder.encode(payload) {
+        wsServer.broadcast(data)
     }
 
     fflush(stdout)
