@@ -15,16 +15,16 @@ if args.contains("--log") {
     logMode = true
 }
 
+// MARK: - MIDI
+
+let kontrolX1 = KontrolX1()
+
 // MARK: - Find djay Pro and check permissions
 
 guard let djay = findDjayPro() else { exit(1) }
 guard checkAccessibilityPermission(djay.element) else { exit(1) }
 
 printError("🎧 Rendering at ~\(1000 / max(renderIntervalMs, 1))fps, polling AX in background... (Ctrl+C to stop)\n")
-
-// MARK: - MIDI
-
-let kontrolX1 = KontrolX1()
 
 // MARK: - Thread-safe shared state
 

@@ -1,154 +1,396 @@
 import CoreMIDI
 import Foundation
 
+/// Bidirectional MIDI proxy between the Traktor Kontrol X1 MK2 hardware and djay Pro.
+///
+/// djay talks only to the virtual "DjayBridge" port; the bridge owns the X1 connection and
+/// forwards traffic both directions, intercepting the few controls that need logic. Phase 1
+/// is a transparent forward (plus the AX-driven displays the bridge already generated).
 public class KontrolX1 {
     private var client = MIDIClientRef()
-    private var outputPort = MIDIPortRef()
-    private var inputPort = MIDIPortRef()
-    private var destination: MIDIEndpointRef?
+    private var x1OutPort = MIDIPortRef()
+    private var x1InPort = MIDIPortRef()
+    private var x1Output: MIDIEndpointRef?         // X1 hardware output (displays + fwd feedback)
+    private var virtualSource = MIDIEndpointRef()  // bridge → djay
+    private var virtualDest = MIDIEndpointRef()    // djay → bridge (feedback + state)
 
-    private static let outputDeviceName = "Traktor Kontrol X1 MK2 - 1 Output"
-    private static let inputDeviceName = "Traktor Kontrol X1 MK2 - 1 Input"
+    private static let x1OutputName = "Traktor Kontrol X1 MK2 - 1 Output"
+    private static let x1InputName = "Traktor Kontrol X1 MK2 - 1 Input"
+    // The virtual port djay talks to. djay only ever sees "DjayBridge"; the X1 is connected to
+    // the bridge, not djay.
+    private static let virtualPortName = "DjayBridge"
+    // Fixed unique IDs so djay's mappings survive bridge restarts.
+    private static let virtualSourceID: Int32 = 0x1D1A0001
+    private static let virtualDestID: Int32 = 0x1D1A0002
 
-    // Shift-held display CCs: the X1 switches each display to read these while shift is held.
-    private static let tempoCCDeck1: UInt8 = 68   // left display
-    private static let tempoCCDeck2: UInt8 = 69   // right display
+    // Display CCs the bridge generates itself (from AX) — never forward djay's output on these.
+    private static let tempoCCDeck1: UInt8 = 68   // left display (shift)
+    private static let tempoCCDeck2: UInt8 = 69   // right display (shift)
+    private static let ownedDisplayCCs: Set<UInt8> = [24, 25, 68, 69]
 
-    // Ordered beat jump values: 1/32 → 128. The X1 MK2 segment display shows the CC value
-    // verbatim, so for whole-beat sizes the value is the number itself.
+    // Beat-jump label → display CC value (X1 shows the CC value verbatim).
     private static let beatJumpOrder: [(label: String, cc: UInt8)] = [
         ("1/32", 0), ("1/16", 116), ("1/8", 118), ("1/4", 114), ("1/2", 112),
         ("1", 1), ("2", 2), ("4", 4), ("8", 8), ("16", 16), ("32", 32), ("64", 64), ("128", 127),
     ]
 
-    // Current position in beatJumpOrder per deck (index into the array)
+    // Coupling: on push the bridge fires one of these notes to djay (bound in the mapping to
+    // autoLoop<size>BeatInterval / autoLoopOnOff). Free notes, above the X1's used range.
+    // All of djay's auto-loop durations (matches beatJumpOrder). suffix = djay keyPath suffix.
+    private static let autoLoopSizes: [(label: String, suffix: String)] = [
+        ("1/32", "003125"), ("1/16", "00625"), ("1/8", "0125"), ("1/4", "025"), ("1/2", "05"),
+        ("1", "1"), ("2", "2"), ("4", "4"), ("8", "8"), ("16", "16"), ("32", "32"),
+        ("64", "64"), ("128", "128"),
+    ]
+    private static let autoLoopBaseNote: [Int: UInt8] = [1: 90, 2: 104]  // 13 notes each: 90-102 / 104-116
+    private static let autoLoopOnOffNotes: [Int: UInt8] = [1: 117, 2: 118]
+
+    static func autoLoopSizeNote(deck: Int, size label: String) -> UInt8? {
+        guard let idx = autoLoopSizes.firstIndex(where: { $0.label == label }) else { return nil }
+        return (autoLoopBaseNote[deck] ?? 96) + UInt8(idx)
+    }
+    static func autoLoopOnOffNote(_ deck: Int) -> UInt8 { autoLoopOnOffNotes[deck] ?? 112 }
+    static func deckForAutoLoopOnOffNote(_ note: UInt8) -> Int? {
+        if note == autoLoopOnOffNotes[1] { return 1 }
+        if note == autoLoopOnOffNotes[2] { return 2 }
+        return nil
+    }
+
     private let lock = NSLock()
-    private var deckPosition: [Int: Int] = [1: 5, 2: 5]  // default to "1 Beat"
+    private var deckPosition: [Int: Int] = [1: 5, 2: 5]  // index into beatJumpOrder
     private var lastRotaryTime: [Int: CFAbsoluteTime] = [:]
-    private static let rotaryCooldown: CFAbsoluteTime = 0.5  // ignore AX corrections for 500ms after last spin
+    private static let rotaryCooldown: CFAbsoluteTime = 0.5  // let the prediction lead over lagging AX
+    private var loopActive: [Int: Bool] = [1: false, 2: false]
+    private var flashOn = true
+    private var flashTimer: DispatchSourceTimer?
+    private let flashQueue = DispatchQueue(label: "loop-flash")
+    private static let flashInterval: TimeInterval = 0.3
+    // Sync-hold mode (KA-272): hold SYNC → encoders become tempo adjust + digits show BPM %.
+    private var syncHeld: [Int: Bool] = [1: false, 2: false]
+    private var syncPressTime: [Int: CFAbsoluteTime] = [:]
+    private var lastTempoMag: [Int: UInt8] = [:]   // cached BPM % magnitude per deck
+    private static let syncTapThreshold: CFAbsoluteTime = 0.25  // ≤ this = a tap (normal sync)
+    // X1 SYNC button notes (bpmSync) and the CCs we emit for speedRelative in sync mode.
+    private static let syncNotes: [Int: UInt8] = [1: 40, 2: 41]
+    private static func speedRelativeCC(_ deck: Int) -> UInt8 { deck == 1 ? 70 : 71 }
+    // Live state model fed by djay's MIDI-out: key (status<<8 | data1) → last value.
+    private var feedbackState: [UInt16: UInt8] = [:]
 
     public init() {
-        var status = MIDIClientCreate("DjayBridge" as CFString, nil, nil, &client)
-        guard status == noErr else {
-            printError("KontrolX1: MIDIClientCreate failed (\(status))")
-            return
+        guard MIDIClientCreate("DjayBridge" as CFString, nil, nil, &client) == noErr else {
+            printError("KontrolX1: MIDIClientCreate failed"); return
+        }
+        guard MIDIOutputPortCreate(client, "x1out" as CFString, &x1OutPort) == noErr else {
+            printError("KontrolX1: output port failed"); return
         }
 
-        status = MIDIOutputPortCreate(client, "Output" as CFString, &outputPort)
-        guard status == noErr else {
-            printError("KontrolX1: MIDIOutputPortCreate failed (\(status))")
-            return
+        // Find the X1 hardware output (we drive its displays + forward djay's LED feedback).
+        for i in 0..<MIDIGetNumberOfDestinations() {
+            let ep = MIDIGetDestination(i)
+            if endpointName(ep) == Self.x1OutputName { x1Output = ep; break }
         }
+        if x1Output == nil { printError("KontrolX1: '\(Self.x1OutputName)' not found") }
+        else { printError("KontrolX1: found \(Self.x1OutputName)") }
 
-        // Find output destination
-        let destCount = MIDIGetNumberOfDestinations()
-        for i in 0..<destCount {
-            let endpoint = MIDIGetDestination(i)
-            var name: Unmanaged<CFString>?
-            MIDIObjectGetStringProperty(endpoint, kMIDIPropertyName, &name)
-            if let n = name?.takeRetainedValue() as String?, n == Self.outputDeviceName {
-                destination = endpoint
-                printError("KontrolX1: found output \(Self.outputDeviceName)")
+        // Listen to the X1 hardware input and forward it to djay.
+        guard MIDIInputPortCreate(client, "x1in" as CFString, x1InputCallback, Unmanaged.passUnretained(self).toOpaque(), &x1InPort) == noErr else {
+            printError("KontrolX1: input port failed"); return
+        }
+        for i in 0..<MIDIGetNumberOfSources() {
+            let ep = MIDIGetSource(i)
+            if endpointName(ep) == Self.x1InputName {
+                MIDIPortConnectSource(x1InPort, ep, nil)
+                printError("KontrolX1: listening on \(Self.x1InputName)")
                 break
             }
         }
-        if destination == nil {
-            printError("KontrolX1: \(Self.outputDeviceName) not found among \(destCount) destinations")
-        }
 
-        // Set up MIDI input to listen for rotary encoder
-        status = MIDIInputPortCreate(client, "Input" as CFString, midiReadCallback, Unmanaged.passUnretained(self).toOpaque(), &inputPort)
-        guard status == noErr else {
-            printError("KontrolX1: MIDIInputPortCreate failed (\(status))")
-            return
+        // Virtual "DjayBridge" port (fixed IDs). Source = bridge→djay; destination = djay→bridge.
+        if MIDISourceCreate(client, Self.virtualPortName as CFString, &virtualSource) == noErr {
+            MIDIObjectSetIntegerProperty(virtualSource, kMIDIPropertyUniqueID, Self.virtualSourceID)
         }
-
-        let srcCount = MIDIGetNumberOfSources()
-        for i in 0..<srcCount {
-            let endpoint = MIDIGetSource(i)
-            var name: Unmanaged<CFString>?
-            MIDIObjectGetStringProperty(endpoint, kMIDIPropertyName, &name)
-            if let n = name?.takeRetainedValue() as String?, n == Self.inputDeviceName {
-                MIDIPortConnectSource(inputPort, endpoint, nil)
-                printError("KontrolX1: listening on \(Self.inputDeviceName)")
-                break
-            }
+        if MIDIDestinationCreate(client, Self.virtualPortName as CFString, djayOutputCallback, Unmanaged.passUnretained(self).toOpaque(), &virtualDest) == noErr {
+            MIDIObjectSetIntegerProperty(virtualDest, kMIDIPropertyUniqueID, Self.virtualDestID)
         }
+        printError("KontrolX1: virtual port '\(Self.virtualPortName)' ready")
     }
 
-    deinit {
-        MIDIClientDispose(client)
-    }
+    deinit { MIDIClientDispose(client) }
 
-    /// Called by AX poll to sync the beat-jump display to reality.
+    // MARK: - AX-driven displays (called from Reader)
+
+    /// Sync the beat-jump display (CC 24/25) to the AX-reported value — but defer to the live
+    /// encoder prediction for `rotaryCooldown` after a turn, since AX lags ~8fps and would
+    /// otherwise flicker the digit back to a stale value mid-dial.
     public func sendBeatJump(deck: Int, value: String) {
-        guard let destination else { return }
-
+        guard let x1Output, let cc = Self.ccForLabel(value) else { return }
         lock.lock()
-        let lastSpin = lastRotaryTime[deck] ?? 0
+        let synced = (syncHeld[1] ?? false) || (syncHeld[2] ?? false)
+        let cooldown = (CFAbsoluteTimeGetCurrent() - (lastRotaryTime[deck] ?? 0)) < Self.rotaryCooldown
+        if !cooldown, let idx = Self.indexForLabel(value) { deckPosition[deck] = idx }
         lock.unlock()
-
-        let now = CFAbsoluteTimeGetCurrent()
-        let cooldownActive = (now - lastSpin) < Self.rotaryCooldown
-
-        // Sync our tracked position to what AX reports (only if not mid-spin)
-        if !cooldownActive, let idx = Self.indexForLabel(value) {
-            lock.lock()
-            deckPosition[deck] = idx
-            lock.unlock()
-        }
-
-        let cc: UInt8 = deck == 1 ? 24 : 25
-        guard let ccValue = Self.ccForLabel(value) else {
-            printError("KontrolX1: unknown beat jump value: \(value)")
-            return
-        }
-
-        if !cooldownActive {
-            sendCC(channel: 0, cc: cc, value: ccValue, to: destination)
-        }
+        if synced { return }  // sync held → digit shows BPM %
+        if !cooldown { send([0xB0, deck == 1 ? 24 : 25, cc], to: x1Output) }
     }
 
-    /// Send a deck's tempo/pitch percentage to the shift-display CC (68 = deck 1 / left,
-    /// 69 = deck 2 / right). The X1 itself switches the display to these CCs while shift is
-    /// held; we just keep them current. Magnitude only — sign ignored for now.
+    /// Tempo/pitch % magnitude → shift display (CC 68/69) normally, or the main digit (CC 24/25)
+    /// while SYNC is held.
     public func setTempoPercent(deck: Int, percent: String) {
-        guard let destination else { return }
-        let cleaned = percent.replacingOccurrences(of: "%", with: "")
-        guard let val = Double(cleaned) else {
-            printError("KontrolX1: unknown tempo percent: \(percent)")
-            return
-        }
+        guard let x1Output, let val = Double(percent.replacingOccurrences(of: "%", with: "")) else { return }
         let mag = UInt8(min(max(abs(val).rounded(), 0), 127))
-        let cc: UInt8 = deck == 1 ? Self.tempoCCDeck1 : Self.tempoCCDeck2
-        sendCC(channel: 0, cc: cc, value: mag, to: destination)
+        lock.lock()
+        lastTempoMag[deck] = mag
+        let synced = (syncHeld[1] ?? false) || (syncHeld[2] ?? false)
+        lock.unlock()
+        let cc: UInt8 = synced ? (deck == 1 ? 24 : 25) : (deck == 1 ? Self.tempoCCDeck1 : Self.tempoCCDeck2)
+        send([0xB0, cc, mag], to: x1Output)
     }
 
-    /// Called from MIDI input when the rotary encoder turns.
-    fileprivate func handleRotary(cc: UInt8, direction: Int) {
-        guard let destination else { return }
+    // MARK: - Proxy
 
-        // CC24 = deck 1, CC25 = deck 2
-        let deck: Int
-        switch cc {
-        case 24: deck = 1
-        case 25: deck = 2
-        default: return
+    /// X1 hardware → djay.
+    fileprivate func handleX1Input(_ bytes: [UInt8]) {
+        guard bytes.count == 3 else { emitToDjay(bytes); return }
+        let status = bytes[0] & 0xF0
+
+        // SYNC button (Note 40/41): tap = normal sync, hold = tempo-adjust mode.
+        if bytes[1] == 40 || bytes[1] == 41, status == 0x90 || status == 0x80 {
+            let deck = bytes[1] == 40 ? 1 : 2
+            if status == 0x90, bytes[2] > 0 { handleSyncPress(deck: deck) }
+            else { handleSyncRelease(deck: deck) }
+            return  // consume
         }
 
+        // Encoder turn (CC 24/25).
+        if status == 0xB0, bytes[1] == 24 || bytes[1] == 25 {
+            let deck = bytes[1] == 24 ? 1 : 2
+            if syncModeActive() {
+                // Sync held → tempo adjust.
+                let cc = Self.speedRelativeCC(deck)
+                emitToDjay([0xB0, cc, bytes[2]])
+                printError("KontrolX1: sync tempo deck \(deck) → CC \(cc) = \(bytes[2])")
+            } else if isLoopActive(deck) {
+                // Loop running → resize the loop AND beat jump together. They start equal (the
+                // loop began at the beat-jump size), so coupling keeps them equal — and lets you
+                // beat-jump at the loop's size. predictBeatJumpDisplay steps the (blinked) value.
+                emitToDjay(bytes)                                  // skipDurationRotary (beat jump)
+                emitToDjay([0xB0, deck == 1 ? 68 : 69, bytes[2]])  // autoLoopDurationRotary (loop)
+                predictBeatJumpDisplay(cc: bytes[1], value: bytes[2])
+            } else {
+                // Loop off → beat-jump size + snappy display. No relative loop-duration nudge;
+                // coupling happens on push (absolute per-size auto-loop).
+                emitToDjay(bytes)
+                predictBeatJumpDisplay(cc: bytes[1], value: bytes[2])
+            }
+            return
+        }
+
+        // Loop encoder push (Note 26/27): consume; start an auto-loop at the current beat-jump
+        // size (watched from AX), or exit if already looping.
+        if bytes[1] == 26 || bytes[1] == 27, status == 0x90 || status == 0x80 {
+            if status == 0x90, bytes[2] > 0 { handleLoopPush(deck: bytes[1] == 26 ? 1 : 2) }
+            return  // never forward the raw push
+        }
+
+        emitToDjay(bytes)
+    }
+
+    // MARK: - Sync-hold mode
+
+    /// Sync-hold is a *global* mode: holding either deck's SYNC shows BPM % on both digits and
+    /// retasks both loop encoders to tempo. No deck selection needed.
+    private func syncModeActive() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return (syncHeld[1] ?? false) || (syncHeld[2] ?? false)
+    }
+
+    private func handleSyncPress(deck: Int) {
         lock.lock()
-        let current = deckPosition[deck] ?? 5
-        let next = min(max(current + direction, 0), Self.beatJumpOrder.count - 1)
+        syncHeld[deck] = true
+        syncPressTime[deck] = CFAbsoluteTimeGetCurrent()
+        lock.unlock()
+        showBpmOnBothDigits()
+    }
+
+    private func handleSyncRelease(deck: Int) {
+        lock.lock()
+        syncHeld[deck] = false
+        let tap = (CFAbsoluteTimeGetCurrent() - (syncPressTime[deck] ?? 0)) < Self.syncTapThreshold
+        let stillActive = (syncHeld[1] ?? false) || (syncHeld[2] ?? false)
+        lock.unlock()
+        // Quick tap = normal sync: re-emit bpmSync for that deck.
+        if tap, let note = Self.syncNotes[deck] {
+            emitToDjay([0x90, note, 127]); emitToDjay([0x90, note, 0])
+        }
+        // Last SYNC released → restore both beat-jump digits.
+        if !stillActive { restoreBeatJumpOnBothDigits() }
+    }
+
+    private func showBpmOnBothDigits() {
+        guard let x1Output else { return }
+        lock.lock(); let m1 = lastTempoMag[1] ?? 0; let m2 = lastTempoMag[2] ?? 0; lock.unlock()
+        send([0xB0, 24, m1], to: x1Output)
+        send([0xB0, 25, m2], to: x1Output)
+    }
+
+    private func restoreBeatJumpOnBothDigits() {
+        guard let x1Output else { return }
+        lock.lock(); let i1 = deckPosition[1] ?? 5; let i2 = deckPosition[2] ?? 5; lock.unlock()
+        send([0xB0, 24, Self.beatJumpOrder[i1].cc], to: x1Output)
+        send([0xB0, 25, Self.beatJumpOrder[i2].cc], to: x1Output)
+    }
+
+    /// Push couples loop ↔ beat jump: fire the absolute per-size auto-loop matching the current
+    /// beat-jump size, or toggle the loop off if it's already active.
+    private func handleLoopPush(deck: Int) {
+        lock.lock()
+        let active = loopActive[deck] ?? false
+        let label = Self.beatJumpOrder[deckPosition[deck] ?? 5].label
+        lock.unlock()
+        if active {
+            fireDjayNote(Self.autoLoopOnOffNote(deck))   // exit
+            setLoopActive(deck, false)                    // optimistic (djay feedback confirms)
+        } else if let note = Self.autoLoopSizeNote(deck: deck, size: label) {
+            fireDjayNote(note)                            // start at beat-jump size
+            setLoopActive(deck, true)                     // optimistic → instant flash
+        } else {
+            printError("KontrolX1: no auto-loop action for size \(label) (deck \(deck))")
+        }
+    }
+
+    private func fireDjayNote(_ note: UInt8) {
+        emitToDjay([0x90, note, 127])
+        emitToDjay([0x90, note, 0])
+    }
+
+    private func isLoopActive(_ deck: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }; return loopActive[deck] ?? false
+    }
+
+    // MARK: - Loop blink (KA-270): while a loop is active, blink its digit between 0 and the length.
+
+    private func startFlashTimer() {
+        lock.lock(); defer { lock.unlock() }
+        guard flashTimer == nil else { return }
+        let t = DispatchSource.makeTimerSource(queue: flashQueue)
+        t.schedule(deadline: .now() + Self.flashInterval, repeating: Self.flashInterval)
+        t.setEventHandler { [weak self] in self?.flashTick() }
+        t.resume()
+        flashTimer = t
+    }
+
+    private func stopFlashTimer() {
+        lock.lock(); defer { lock.unlock() }
+        flashTimer?.cancel(); flashTimer = nil; flashOn = true
+    }
+
+    // 1-beat-jump button LEDs to railroad-flash while a loop is active (real note numbers from
+    // the map — the Controller Editor's names were an octave low). Per deck two groups alternate;
+    // each carries the button's normal + shift note so it flashes in either layer.
+    // Deck 1: skipBackward1Beat G#0(20)/E4(64) ↔ skipForward1Beat A#0(22)/F#4(66).
+    // Deck 2: A0(21)/F4(65) ↔ B0(23)/G4(67).
+    private static let loopFlashLEDs: [Int: (a: [UInt8], b: [UInt8])] = [
+        1: (a: [20], b: [22]),
+        2: (a: [21], b: [23]),
+    ]
+    private static let loopFlashNotes: Set<UInt8> = [20, 21, 22, 23]
+
+    /// Update loop on/off and drive the flash + digit. Called both optimistically on the push
+    /// (so it feels instant) and on djay's confirming feedback; the `changed` guard makes the
+    /// second call a no-op.
+    private func setLoopActive(_ deck: Int, _ on: Bool) {
+        lock.lock()
+        let changed = (loopActive[deck] ?? false) != on
+        loopActive[deck] = on
+        let anyActive = loopActive.values.contains(true)
+        let f = flashOn
+        let idx = deckPosition[deck] ?? 5
+        lock.unlock()
+        guard changed else { return }
+        if let x1Output { send([0x90, deck == 1 ? 26 : 27, on ? 127 : 0], to: x1Output) }  // X1 loop LED
+        if on {
+            startFlashTimer()
+            sendFlashFrame(deck: deck, on: f)  // instant first frame — no 300ms wait
+        } else {
+            turnOffLoopFlashLEDs(deck: deck)
+            if let x1Output, !syncModeActive() {
+                send([0xB0, deck == 1 ? 24 : 25, Self.beatJumpOrder[idx].cc], to: x1Output)
+            }
+            if !anyActive { stopFlashTimer() }
+        }
+    }
+
+    private func sendFlashFrame(deck: Int, on: Bool) {
+        guard let x1Output, let leds = Self.loopFlashLEDs[deck] else { return }
+        for n in leds.a { send([0x90, n, on ? 127 : 0], to: x1Output) }   // railroad: A vs B
+        for n in leds.b { send([0x90, n, on ? 0 : 127], to: x1Output) }
+    }
+
+    private func flashTick() {
+        lock.lock(); flashOn.toggle(); let on = flashOn; let active = loopActive; lock.unlock()
+        for deck in [1, 2] where active[deck] == true { sendFlashFrame(deck: deck, on: on) }
+    }
+
+    private func turnOffLoopFlashLEDs(deck: Int) {
+        guard let x1Output, let leds = Self.loopFlashLEDs[deck] else { return }
+        for n in leds.a + leds.b { send([0x90, n, 0], to: x1Output) }
+    }
+
+    /// Snappy display: step the tracked beat-jump index on each detent and show it on CC 24/25
+    /// immediately (the AX sync would lag ~8fps behind the encoder).
+    private func predictBeatJumpDisplay(cc: UInt8, value: UInt8) {
+        guard let x1Output else { return }
+        let direction = value == 0x01 ? 1 : (value == 0x7F ? -1 : 0)
+        guard direction != 0 else { return }
+        let deck = cc == 24 ? 1 : 2
+        lock.lock()
+        let next = min(max((deckPosition[deck] ?? 5) + direction, 0), Self.beatJumpOrder.count - 1)
         deckPosition[deck] = next
         lastRotaryTime[deck] = CFAbsoluteTimeGetCurrent()
         lock.unlock()
+        send([0xB0, cc, Self.beatJumpOrder[next].cc], to: x1Output)
+    }
 
-        let entry = Self.beatJumpOrder[next]
-        sendCC(channel: 0, cc: cc, value: entry.cc, to: destination)
-        printError("KontrolX1: rotary deck \(deck) → \(entry.label) (predicted)")
+    /// djay → X1 hardware. Record state, forward LED feedback (except the bridge's display CCs).
+    fileprivate func handleDjayOutput(_ bytes: [UInt8]) {
+        guard bytes.count >= 3 else { return }
+        let status = bytes[0] & 0xF0
+        lock.lock()
+        feedbackState[UInt16(bytes[0]) << 8 | UInt16(bytes[1])] = bytes[2]
+        lock.unlock()
+        // Track loop on/off from djay's autoLoopOnOff feedback (drives push start-vs-exit), and
+        // reflect it on the X1's loop LED (which sits on the push note 26/27). Consume our own
+        // state notes — they aren't real X1 controls.
+        if status == 0x90 || status == 0x80, let deck = Self.deckForAutoLoopOnOffNote(bytes[1]) {
+            setLoopActive(deck, status == 0x90 && bytes[2] > 0)  // confirms the optimistic push
+            return
+        }
+        // While a loop is active the bridge owns the FX-flash LEDs — drop djay's feedback on
+        // them so it doesn't fight the railroad blink.
+        if status == 0x90 || status == 0x80, Self.loopFlashNotes.contains(bytes[1]) {
+            lock.lock(); let anyLoop = loopActive.values.contains(true); lock.unlock()
+            if anyLoop { return }
+        }
+        // Don't clobber the displays the bridge owns.
+        if status == 0xB0, Self.ownedDisplayCCs.contains(bytes[1]) { return }
+        if let x1Output { send(bytes, to: x1Output) }
     }
 
     // MARK: - Helpers
+
+    private func emitToDjay(_ bytes: [UInt8]) {
+        var pl = MIDIPacketList()
+        var pkt = MIDIPacketListInit(&pl)
+        pkt = MIDIPacketListAdd(&pl, MemoryLayout<MIDIPacketList>.size, pkt, 0, bytes.count, bytes)
+        MIDIReceived(virtualSource, &pl)
+    }
+
+    private func send(_ bytes: [UInt8], to endpoint: MIDIEndpointRef) {
+        var pl = MIDIPacketList()
+        var pkt = MIDIPacketListInit(&pl)
+        pkt = MIDIPacketListAdd(&pl, MemoryLayout<MIDIPacketList>.size, pkt, 0, bytes.count, bytes)
+        MIDISend(x1OutPort, endpoint, &pl)
+    }
 
     private static func indexForLabel(_ value: String) -> Int? {
         let num = String(value.split(separator: " ").first ?? "")
@@ -159,38 +401,34 @@ public class KontrolX1 {
         guard let idx = indexForLabel(value) else { return nil }
         return beatJumpOrder[idx].cc
     }
-
-    private func sendCC(channel: UInt8, cc: UInt8, value: UInt8, to endpoint: MIDIEndpointRef) {
-        let status: UInt8 = 0xB0 | (channel & 0x0F)
-        var packetList = MIDIPacketList()
-        var packet = MIDIPacketListInit(&packetList)
-        let bytes: [UInt8] = [status, cc, value]
-        packet = MIDIPacketListAdd(&packetList, MemoryLayout<MIDIPacketList>.size, packet, 0, 3, bytes)
-        MIDISend(outputPort, endpoint, &packetList)
-    }
 }
 
-// MARK: - MIDI input callback (C function pointer)
+private func endpointName(_ ep: MIDIEndpointRef) -> String {
+    var name: Unmanaged<CFString>?
+    MIDIObjectGetStringProperty(ep, kMIDIPropertyName, &name)
+    return (name?.takeRetainedValue() as String?) ?? ""
+}
 
-private func midiReadCallback(packetList: UnsafePointer<MIDIPacketList>, refCon: UnsafeMutableRawPointer?, connRefCon: UnsafeMutableRawPointer?) {
+private func packetBytes(_ packet: MIDIPacket) -> [UInt8] {
+    Array(Mirror(reflecting: packet.data).children.prefix(Int(packet.length)).map { $0.value as! UInt8 })
+}
+
+// MARK: - C callbacks
+
+private func x1InputCallback(packetList: UnsafePointer<MIDIPacketList>, refCon: UnsafeMutableRawPointer?, connRefCon: UnsafeMutableRawPointer?) {
     let controller = Unmanaged<KontrolX1>.fromOpaque(refCon!).takeUnretainedValue()
     var packet = packetList.pointee.packet
     for _ in 0..<packetList.pointee.numPackets {
-        let bytes = Mirror(reflecting: packet.data).children.map { $0.value as! UInt8 }
-        if packet.length >= 3 {
-            let status = bytes[0]
-            let cc = bytes[1]
-            let val = bytes[2]
-            // CC message on channel 0
-            if status == 0xB0 {
-                if cc == 24 || cc == 25 {
-                    let direction = val == 0x01 ? 1 : (val == 0x7F ? -1 : 0)
-                    if direction != 0 {
-                        controller.handleRotary(cc: cc, direction: direction)
-                    }
-                }
-            }
-        }
+        if packet.length >= 1 { controller.handleX1Input(packetBytes(packet)) }
+        packet = MIDIPacketNext(&packet).pointee
+    }
+}
+
+private func djayOutputCallback(packetList: UnsafePointer<MIDIPacketList>, refCon: UnsafeMutableRawPointer?, srcConnRefCon: UnsafeMutableRawPointer?) {
+    let controller = Unmanaged<KontrolX1>.fromOpaque(refCon!).takeUnretainedValue()
+    var packet = packetList.pointee.packet
+    for _ in 0..<packetList.pointee.numPackets {
+        if packet.length >= 1 { controller.handleDjayOutput(packetBytes(packet)) }
         packet = MIDIPacketNext(&packet).pointee
     }
 }
