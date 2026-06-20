@@ -7,12 +7,12 @@ public class MainDeckTracker {
 
     public init() {}
 
-    /// Call each poll cycle with current deck states.
+    /// Call each poll cycle with current deck states and crossfader value.
     /// Returns the current main deck number (1 or 2), or nil.
     @discardableResult
-    public func update(deck1: DeckInfo, deck2: DeckInfo) -> Int? {
-        let deck1OnAir = isOnAir(deck: deck1)
-        let deck2OnAir = isOnAir(deck: deck2)
+    public func update(deck1: DeckInfo, deck2: DeckInfo, crossfader: String?) -> Int? {
+        let deck1OnAir = isOnAir(deck: deck1, deckNumber: 1, crossfader: crossfader)
+        let deck2OnAir = isOnAir(deck: deck2, deckNumber: 2, crossfader: crossfader)
 
         if let current = mainDeck {
             let currentDeck = current == 1 ? deck1 : deck2
@@ -73,11 +73,17 @@ private func parsePercent(_ value: String?) -> Int? {
     return Int(cleaned)
 }
 
-private func isOnAir(deck: DeckInfo) -> Bool {
-    // A deck is on-air if its line volume is up. (Crossfader gating removed — the
-    // X1 MK2 has no crossfader and djay's crossfader is no longer read.)
+private func isOnAir(deck: DeckInfo, deckNumber: Int, crossfader: String?) -> Bool {
     guard let lineVol = parsePercent(deck.lineVolume), lineVol > 0 else {
         return false
     }
+
+    if let cf = parsePercent(crossfader) {
+        // Crossfader at 0% = only Deck 1 audible
+        // Crossfader at 100% = only Deck 2 audible
+        if cf == 0 && deckNumber == 2 { return false }
+        if cf == 100 && deckNumber == 1 { return false }
+    }
+
     return true
 }

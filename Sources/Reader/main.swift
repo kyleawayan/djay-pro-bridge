@@ -23,6 +23,7 @@ if args.contains("--log") {
 // MARK: - MIDI
 
 let kontrolX1 = KontrolX1()
+let kontrolZ1 = KontrolZ1()  // mixer faders (line volume + crossfader) over MIDI
 
 // MARK: - Find djay Pro and check permissions
 
@@ -58,7 +59,7 @@ class SharedState {
         d2.isPlaying = _playDebounce2.update(isPlaying: deck2.isPlaying)
         _deck1 = d1
         _deck2 = d2
-        _mainDeck = _tracker.update(deck1: d1, deck2: d2)
+        _mainDeck = _tracker.update(deck1: d1, deck2: d2, crossfader: crossfader)
         _interp1.update(
             elapsedTime: d1.elapsedTime, remainingTime: d1.remainingTime,
             isPlaying: d1.isPlaying, bpmPercent: d1.bpmPercent
@@ -141,9 +142,12 @@ struct BroadcastPayload: Codable {
 let pollQueue = DispatchQueue(label: "ax-poll", qos: .userInitiated)
 pollQueue.async {
     while true {
-        let deck1 = getDeckInfo(app: djay.element, deckNumber: 1)
-        let deck2 = getDeckInfo(app: djay.element, deckNumber: 2)
-        let crossfader = getCrossfader(app: djay.element)
+        var deck1 = getDeckInfo(app: djay.element, deckNumber: 1)
+        var deck2 = getDeckInfo(app: djay.element, deckNumber: 2)
+        // Z1 mixer faders (view-independent) override the AX line volume + crossfader.
+        if let v = kontrolZ1.deckVolumePercent(1) { deck1.lineVolume = v }
+        if let v = kontrolZ1.deckVolumePercent(2) { deck2.lineVolume = v }
+        let crossfader = kontrolZ1.crossfaderPercent() ?? getCrossfader(app: djay.element)
         state.updateFromAX(deck1: deck1, deck2: deck2, crossfader: crossfader)
         // No sleep — poll as fast as AX allows (~8fps)
     }
