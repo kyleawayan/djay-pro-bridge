@@ -70,3 +70,63 @@ public func getValue(_ element: AXUIElement) -> String? {
 public func getTitle(_ element: AXUIElement) -> String? {
     return getAttr(element, kAXTitleAttribute) as? String
 }
+
+public func getSubrole(_ element: AXUIElement) -> String? {
+    return getAttr(element, kAXSubroleAttribute) as? String
+}
+
+// MARK: - AX Actions
+
+public func getActions(_ element: AXUIElement) -> [String] {
+    var names: CFArray?
+    guard AXUIElementCopyActionNames(element, &names) == .success,
+          let arr = names as? [String] else { return [] }
+    return arr
+}
+
+/// Perform an AX action (e.g. kAXPressAction, kAXShowMenuAction). Returns true on success.
+@discardableResult
+public func performAction(_ element: AXUIElement, _ action: String) -> Bool {
+    return AXUIElementPerformAction(element, action as CFString) == .success
+}
+
+// MARK: - Element-valued attributes
+
+/// Read an attribute whose value is itself an AXUIElement (e.g. AXFocusedUIElement).
+public func getElementAttr(_ element: AXUIElement, _ attr: String) -> AXUIElement? {
+    var value: AnyObject?
+    guard AXUIElementCopyAttributeValue(element, attr as CFString, &value) == .success,
+          let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    return (value as! AXUIElement)
+}
+
+/// Read an attribute whose value is an array of AXUIElements.
+public func getElements(_ element: AXUIElement, _ attr: String) -> [AXUIElement] {
+    return getAttr(element, attr) as? [AXUIElement] ?? []
+}
+
+public func getFocusedElement(_ app: AXUIElement) -> AXUIElement? {
+    return getElementAttr(app, kAXFocusedUIElementAttribute)
+}
+
+public func getSelectedRows(_ element: AXUIElement) -> [AXUIElement] {
+    return getElements(element, kAXSelectedRowsAttribute)
+}
+
+public func getDefaultButton(_ window: AXUIElement) -> AXUIElement? {
+    return getElementAttr(window, kAXDefaultButtonAttribute)
+}
+
+// MARK: - Geometry (global top-left screen coordinates)
+
+public func getPosition(_ element: AXUIElement) -> CGPoint? {
+    guard let v = getAttr(element, kAXPositionAttribute), CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+    var p = CGPoint.zero
+    return AXValueGetValue(v as! AXValue, .cgPoint, &p) ? p : nil
+}
+
+public func getSize(_ element: AXUIElement) -> CGSize? {
+    guard let v = getAttr(element, kAXSizeAttribute), CFGetTypeID(v) == AXValueGetTypeID() else { return nil }
+    var s = CGSize.zero
+    return AXValueGetValue(v as! AXValue, .cgSize, &s) ? s : nil
+}

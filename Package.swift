@@ -20,6 +20,11 @@ let package = Package(
             dependencies: ["DjayBridge"],
             path: "Sources/Dump"
         ),
+        .executableTarget(
+            name: "Sorter",
+            dependencies: ["DjayBridge"],
+            path: "Sources/Sorter"
+        ),
         .testTarget(
             name: "DjayBridgeTests",
             dependencies: ["DjayBridge"],
