@@ -30,6 +30,7 @@ private let kVKDelete: CGKeyCode = 0x33
 
 public enum SortOutcome {
     case added(track: String, playlist: String, removed: Bool)
+    case alreadyInPlaylist(track: String, playlist: String)   // djay popped its Add/Skip/Cancel dialog — halted for the user
     case noPlaylistForSlot(Int)
     case noSelection
     case noMenu
@@ -235,19 +236,43 @@ func postKey(_ key: CGKeyCode, flags: CGEventFlags = []) {
     up?.post(tap: .cghidEventTap)
 }
 
-/// Look for a modal dialog/sheet and press its default button. Returns true if handled.
-func confirmAnyDialog(_ app: AXUIElement, timeoutMs: Int) -> Bool {
+/// A modal alert/sheet attached to the app (the remove-confirm, or the
+/// "already in playlist" Add/Skip/Cancel alert).
+func findDialog(_ app: AXUIElement) -> AXUIElement? {
+    for window in getChildren(app) {
+        let sub = getSubrole(window)
+        if getRole(window) == "AXSheet" || sub == "AXDialog" || sub == "AXSystemDialog" { return window }
+        if let sheet = findFirst(in: window, maxDepth: 4, where: { getRole($0) == "AXSheet" }) { return sheet }
+    }
+    return nil
+}
+
+func waitForDialog(_ app: AXUIElement, timeoutMs: Int) -> AXUIElement? {
     let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
     repeat {
-        for window in getChildren(app) {
-            let sub = getSubrole(window)
-            let role = getRole(window)
-            let isDialog = role == "AXSheet" || sub == "AXDialog" || sub == "AXSystemDialog"
-            let dialog = isDialog ? window : (findFirst(in: window, maxDepth: 4) { getRole($0) == "AXSheet" })
-            if let dialog, let button = getDefaultButton(dialog) {
-                performAction(button, kAXPressAction)
-                return true
-            }
+        if let d = findDialog(app) { return d }
+        Thread.sleep(forTimeInterval: 0.03)
+    } while Date() < deadline
+    return nil
+}
+
+func pressDialogButton(_ dialog: AXUIElement, titledAnyOf titles: [String]) -> Bool {
+    guard let btn = findFirst(in: dialog, where: {
+        getRole($0) == "AXButton" && titles.contains(getTitle($0) ?? "")
+    }) else { return false }
+    return performAction(btn, kAXPressAction)
+}
+
+/// Confirm djay's remove-from-playlist alert by pressing its "Remove Item" button.
+/// Matches removal verbs ONLY — never a generic default button — so an unexpected
+/// sheet (notably the duplicate Add/Skip/Cancel alert, whose default is "Add") is
+/// left completely untouched.
+func confirmRemoveDialog(_ app: AXUIElement, timeoutMs: Int) -> Bool {
+    let deadline = Date().addingTimeInterval(Double(timeoutMs) / 1000.0)
+    repeat {
+        if let dialog = findDialog(app),
+           pressDialogButton(dialog, titledAnyOf: ["Remove Item", "Remove", "Delete"]) {
+            return true
         }
         Thread.sleep(forTimeInterval: 0.03)
     } while Date() < deadline
@@ -270,8 +295,8 @@ func removeSelectedTrackFromCurrentPlaylist(_ app: AXUIElement, pid: pid_t) -> B
     if let table { AXUIElementSetAttributeValue(table, kAXFocusedAttribute as CFString, kCFBooleanTrue) }
     Thread.sleep(forTimeInterval: 0.05)
     postKey(kVKDelete, flags: .maskCommand)
-    // Accept djay's confirm dialog by pressing its default button ("Remove Item").
-    return confirmAnyDialog(app, timeoutMs: 1500)
+    // Accept djay's confirm dialog by pressing its "Remove Item" button.
+    return confirmRemoveDialog(app, timeoutMs: 1500)
 }
 
 // MARK: - Bonus: playlists already containing the track
@@ -316,9 +341,22 @@ public func sortSelectedTrack(_ app: AXUIElement, pid: pid_t, slot: Int) -> Sort
         return .noPlaylistForSlot(slot)
     }
 
-    // pressAddToPlaylist dismissed the menu. Remove from current if safe.
+    // If the track is already in [N], djay pops an Add / Skip / Cancel alert
+    // (an AXSheet) instead of adding silently. Stop everything and leave it open
+    // so the user decides — do NOT auto-confirm, do NOT remove from the inbox.
+    if waitForDialog(app, timeoutMs: 800) != nil {
+        return .alreadyInPlaylist(track: track, playlist: playlist)
+    }
+
+    // Clean add (no dialog). Remove from the current playlist if safe.
     if canRemove {
         let removed = removeSelectedTrackFromCurrentPlaylist(app, pid: pid)
+        // Safety net: if the dup sheet slipped past the window above, the remove
+        // was blocked by the modal and confirmRemoveDialog left it untouched —
+        // report the halt rather than a bogus "added/removed".
+        if !removed, findDialog(app) != nil {
+            return .alreadyInPlaylist(track: track, playlist: playlist)
+        }
         return .added(track: track, playlist: playlist, removed: removed)
     } else {
         return .added(track: track, playlist: playlist, removed: false)

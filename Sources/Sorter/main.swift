@@ -49,6 +49,8 @@ func logOutcome(_ o: SortOutcome, slot: Int) {
         let tail = removed ? "removed from current playlist ✓"
                            : "⚠ added but NOT removed (no 'Remove from Playlist' in menu)"
         printError("\(stamp()) \"\(track)\" → added \(playlist) · \(tail)")
+    case .alreadyInPlaylist(let track, let playlist):
+        printError("\(stamp()) ⏸ \"\(track)\" already in \(playlist) — halted; choose Add/Skip/Cancel in djay yourself (not removed)")
     case .noPlaylistForSlot(let n):
         printError("\(stamp()) ⚠ no playlist \"[\(n)] …\" — left in place")
     case .noSelection:
