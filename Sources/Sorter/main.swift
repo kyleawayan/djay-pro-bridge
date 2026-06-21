@@ -4,18 +4,13 @@ import Foundation
 
 // MARK: - djay Pro one-key playlist sorter
 //
-// Standalone command (independent of the Reader TUI / MIDI bridge). While viewing
-// the inbox playlist, press 1–8 to file the highlighted track into the playlist
-// whose name starts with "[N] " and remove it from the inbox. Press ` to print
-// which playlists the highlighted track already belongs to.
-//
-// The inbox is any playlist whose name starts with "!" (it sorts to the top) —
-// same convention idea as the "[N] " destination prefixes. Nothing
-// playlist-specific is baked into this tool.
+// Standalone command (independent of the Reader TUI / MIDI bridge). In djay,
+// highlight a track and press F13–F17 to file it into the playlist whose name
+// starts with "[N] " (1,2,3,5,8) and remove it from the current playlist. F18
+// prints which playlists the track already belongs to.
 
 // MARK: - Args
 
-let inboxPrefix = "!"
 var onceSlot: Int?           // --once N : run one sort on the current selection and exit
 var onceMembership = false   // --membership : print current track's playlists and exit
 do {
@@ -87,7 +82,7 @@ let nsApp = NSApplication.shared
 nsApp.setActivationPolicy(.accessory)
 
 let trigger = KeyboardTrigger(
-    app: app, pid: pid, inboxPrefix: inboxPrefix,
+    app: app, pid: pid,
     onSlot: { slot in
         let outcome = sortSelectedTrack(app, pid: pid, slot: slot)
         logOutcome(outcome, slot: slot)
@@ -101,7 +96,7 @@ let trigger = KeyboardTrigger(
 
 guard trigger.start() else { exit(1) }
 
-printError("Destinations mapped by \"[N] \" name prefix. Inbox = any playlist starting with \"\(inboxPrefix)\".")
-printError("Ready. In the inbox, highlight a track and press F13–F17 (→ 1,2,3,5,8).  F18 = show membership.")
+printError("Destinations mapped by \"[N] \" playlist-name prefix.")
+printError("Ready. In djay, highlight a track and press F13–F17 (→ 1,2,3,5,8).  F18 = show membership.")
 
 nsApp.run()

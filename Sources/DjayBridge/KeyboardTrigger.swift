@@ -11,24 +11,18 @@ import Foundation
 //   F13→slot 1   F14→slot 2   F15→slot 3   F16→slot 5   F17→slot 8
 //   F18→ membership readout (which playlists the selected track is in)
 //
-// Hotkeys are registered globally (they don't reach other apps while running),
-// but the SORT action is gated: it only fires when djay is frontmost and the
-// current playlist is the inbox (name starts with `inboxPrefix`). Membership is
-// available whenever djay is frontmost.
+// Hotkeys fire whenever djay is frontmost — from ANY playlist. Sorting from a
+// playlist adds to [N] and removes the track from that playlist; sorting from
+// the main collection just adds (there's no "Remove from Playlist", so the
+// remove is skipped — see PlaylistSorter's guard).
 
 public final class KeyboardTrigger {
     private let app: AXUIElement
     private let pid: pid_t
-    private let inboxPrefix: String
     private let onSlot: (Int) -> Void
     private let onMembership: () -> Void
 
-    private let lock = NSLock()
-    private var cachedInbox = false
-    private var lastActive: Bool?
-
     private let workQueue = DispatchQueue(label: "playlist-sort")
-    private var pollTimer: DispatchSourceTimer?
     private var hotKeyRefs: [EventHotKeyRef?] = []
     private var handlerRef: EventHandlerRef?
 
@@ -42,11 +36,10 @@ public final class KeyboardTrigger {
         (UInt32(kVK_F18), 0),   // membership
     ]
 
-    public init(app: AXUIElement, pid: pid_t, inboxPrefix: String,
+    public init(app: AXUIElement, pid: pid_t,
                 onSlot: @escaping (Int) -> Void, onMembership: @escaping () -> Void) {
         self.app = app
         self.pid = pid
-        self.inboxPrefix = inboxPrefix
         self.onSlot = onSlot
         self.onMembership = onMembership
     }
@@ -55,7 +48,6 @@ public final class KeyboardTrigger {
     public func start() -> Bool {
         guard installHandler() else { return false }
         registerHotkeys()
-        startPoll()
         return true
     }
 
@@ -99,43 +91,16 @@ public final class KeyboardTrigger {
     }
 
     private func handle(id: Int) {
-        guard isFrontmost() else { return }
+        guard isFrontmost() else { return }   // only act while djay is the active app
         if id == 0 {
             workQueue.async { [weak self] in self?.onMembership() }
-            return
+        } else {
+            workQueue.async { [weak self] in self?.onSlot(id) }
         }
-        lock.lock(); let inbox = cachedInbox; lock.unlock()
-        guard inbox else { return }   // sorts only fire while viewing the inbox
-        workQueue.async { [weak self] in self?.onSlot(id) }
     }
 
     private func isFrontmost() -> Bool {
         NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
-    }
-
-    // MARK: Status poll (4 Hz) — drives the active/paused indicator + cached gate
-
-    private func startPoll() {
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "inbox-poll"))
-        timer.schedule(deadline: .now(), repeating: 0.25)
-        timer.setEventHandler { [weak self] in self?.poll() }
-        timer.resume()
-        pollTimer = timer
-    }
-
-    private func poll() {
-        let name = currentPlaylistName(app)
-        let inbox = name?.hasPrefix(inboxPrefix) ?? false
-        lock.lock(); cachedInbox = inbox; lock.unlock()
-
-        if lastActive != inbox {
-            lastActive = inbox
-            if inbox {
-                printError("▶ active — inbox \"\(name ?? inboxPrefix)\"")
-            } else {
-                printError("⏸ paused — viewing \"\(name ?? "?")\"  (F13–F17 inert)")
-            }
-        }
     }
 }
 
