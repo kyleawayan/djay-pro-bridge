@@ -16,7 +16,6 @@ import Foundation
 // MARK: - Args
 
 let inboxPrefix = "!"
-var modifier = KeyboardTrigger.Modifier.none
 var onceSlot: Int?           // --once N : run one sort on the current selection and exit
 var onceMembership = false   // --membership : print current track's playlists and exit
 do {
@@ -24,7 +23,6 @@ do {
     var i = 1
     while i < argv.count {
         switch argv[i] {
-        case "--modifier":   i += 1; if i < argv.count { modifier = KeyboardTrigger.Modifier(rawValue: argv[i]) ?? .none }
         case "--once":       i += 1; if i < argv.count { onceSlot = Int(argv[i]) }
         case "--membership": onceMembership = true
         default: break
@@ -80,9 +78,14 @@ if let slot = onceSlot {
 }
 
 // MARK: - Trigger
+//
+// Carbon hotkeys need an application event loop, so run as a faceless agent.
+
+let nsApp = NSApplication.shared
+nsApp.setActivationPolicy(.accessory)
 
 let trigger = KeyboardTrigger(
-    app: app, pid: pid, inboxPrefix: inboxPrefix, modifier: modifier,
+    app: app, pid: pid, inboxPrefix: inboxPrefix,
     onSlot: { slot in
         let outcome = sortSelectedTrack(app, pid: pid, slot: slot)
         logOutcome(outcome, slot: slot)
@@ -97,7 +100,6 @@ let trigger = KeyboardTrigger(
 guard trigger.start() else { exit(1) }
 
 printError("Destinations mapped by \"[N] \" name prefix. Inbox = any playlist starting with \"\(inboxPrefix)\".")
-printError("Ready. In the inbox, highlight a track and press 1–8.   (` = show membership)")
-if modifier != .none { printError("Modifier required: \(modifier.rawValue)+digit") }
+printError("Ready. In the inbox, highlight a track and press F13–F17 (→ 1,2,3,5,8).  F18 = show membership.")
 
-CFRunLoopRun()
+nsApp.run()
