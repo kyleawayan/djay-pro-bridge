@@ -2,12 +2,14 @@ import DjayBridge
 import Cocoa
 import Foundation
 
-// MARK: - djay Pro one-key playlist sorter
+// MARK: - djay Pro vim-flow library organizer
 //
-// Standalone command (independent of the Reader TUI / MIDI bridge). In djay,
-// highlight a track and press F13–F17 to file it into the playlist whose name
-// starts with "[N] " (1,2,3,5,8) and remove it from the current playlist. F18
-// prints which playlists the track already belongs to.
+// Standalone command (independent of the Reader TUI / MIDI bridge). Intercepts
+// bare keys while djay is frontmost (via CGEventTap — see KeyboardTrigger):
+//
+//   1 2 3 5 8  file the selected track into playlist "[N] …" + remove from current
+//   j / k      down / up the track list        h / l   beat jump back / forward
+//   enter      load selected track on Deck 1    m       show playlist membership
 
 // MARK: - Args
 
@@ -76,27 +78,38 @@ if let slot = onceSlot {
 
 // MARK: - Trigger
 //
-// Carbon hotkeys need an application event loop, so run as a faceless agent.
+// The CGEventTap needs a run loop, so run as a faceless agent.
 
 let nsApp = NSApplication.shared
 nsApp.setActivationPolicy(.accessory)
 
-let trigger = KeyboardTrigger(
-    app: app, pid: pid,
-    onSlot: { slot in
+func showMembership() {
+    let track = selectedTrackLabel(app) ?? "track"
+    let names = playlistsContainingSelectedTrack(app)
+    printError("\(stamp()) \"\(track)\" → in: \(names.isEmpty ? "(none)" : names.joined(separator: ", "))")
+}
+
+let trigger = KeyboardTrigger(pid: pid) { action in
+    switch action {
+    case .sort(let slot):
         let outcome = sortSelectedTrack(app, pid: pid, slot: slot)
         logOutcome(outcome, slot: slot)
-    },
-    onMembership: {
-        let track = selectedTrackLabel(app) ?? "track"
-        let names = playlistsContainingSelectedTrack(app)
-        printError("\(stamp()) \"\(track)\" → in: \(names.isEmpty ? "(none)" : names.joined(separator: ", "))")
+    case .load:
+        if loadSelectedTrackOnDeck1(app, pid: pid) {
+            printError("\(stamp()) ⏵ loaded on Deck 1")
+        } else {
+            printError("\(stamp()) ⚠ could not load on Deck 1")
+        }
+    case .membership:
+        showMembership()
+    case .navDown, .navUp, .beatBack, .beatForward:
+        break   // pure key emulation, handled inside KeyboardTrigger
     }
-)
+}
 
 guard trigger.start() else { exit(1) }
 
 printError("Destinations mapped by \"[N] \" playlist-name prefix.")
-printError("Ready. In djay, highlight a track and press F13–F17 (→ 1,2,3,5,8).  F18 = show membership.")
+printError("Ready. djay frontmost:  1 2 3 5 8 = sort · j/k = up/down · enter = load Deck 1 · h/l = beat jump · m = membership.")
 
 nsApp.run()

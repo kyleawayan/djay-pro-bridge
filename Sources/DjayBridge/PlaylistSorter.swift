@@ -299,6 +299,26 @@ func removeSelectedTrackFromCurrentPlaylist(_ app: AXUIElement, pid: pid_t) -> B
     return confirmRemoveDialog(app, timeoutMs: 1500)
 }
 
+// MARK: - Load on Deck 1
+
+/// Load the selected track onto Deck 1 via the context menu's "Load on Deck 1"
+/// item, then refocus the song table so j/k navigation keeps working (pressing
+/// the item moves focus off the table, same as the remove flow).
+@discardableResult
+public func loadSelectedTrackOnDeck1(_ app: AXUIElement, pid: pid_t) -> Bool {
+    guard getSelectedTrackRow(app) != nil else { return false }
+    guard let menu = openContextMenu(app) else { return false }
+    guard let item = waitForMenuItem(menu, titled: "Load on Deck 1", timeoutMs: 1200) else {
+        closeMenu(menu)
+        return false
+    }
+    let ok = performAction(item, kAXPressAction)   // dismisses the menu, loads the deck
+    if let table = findSongTable(app) {
+        AXUIElementSetAttributeValue(table, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    }
+    return ok
+}
+
 // MARK: - Bonus: playlists already containing the track
 
 public func playlistsContainingSelectedTrack(_ app: AXUIElement) -> [String] {
