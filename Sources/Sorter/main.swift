@@ -43,8 +43,10 @@ func stamp() -> String { "[\(clock.string(from: Date()))]" }
 func logOutcome(_ o: SortOutcome, slot: Int) {
     switch o {
     case .added(let track, let playlist, let removed):
+        // `removed` = a remove-confirm dialog was pressed. djay can remove without
+        // prompting, so a false here means "unconfirmed", not "definitely not removed".
         let tail = removed ? "removed from current playlist ✓"
-                           : "⚠ added but NOT removed (no 'Remove from Playlist' in menu)"
+                           : "removal unconfirmed (no confirm dialog seen)"
         printError("\(stamp()) \"\(track)\" → added \(playlist) · \(tail)")
     case .alreadyInPlaylist(let track, let playlist):
         printError("\(stamp()) ⏸ \"\(track)\" already in \(playlist) — halted; choose Add/Skip/Cancel in djay yourself (not removed)")
