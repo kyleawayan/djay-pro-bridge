@@ -306,6 +306,19 @@ func removeSelectedTrackFromCurrentPlaylist(_ app: AXUIElement, pid: pid_t) -> B
     return confirmRemoveDialog(app, timeoutMs: 1500)
 }
 
+// MARK: - Dismiss a simple alert (Escape → OK)
+
+/// Press the "OK" button on djay's single-button alert (e.g. "Could not load
+/// track"). Such an alert has no Cancel button, so macOS won't close it on
+/// Escape by itself. Matches "OK" ONLY, so multi-button dialogs — the
+/// Add/Skip/Cancel duplicate alert and the remove-confirm — are left untouched.
+/// Returns true if an OK button was pressed.
+@discardableResult
+public func dismissAlertOK(_ app: AXUIElement) -> Bool {
+    guard let dialog = findDialog(app) else { return false }
+    return pressDialogButton(dialog, titledAnyOf: ["OK"])
+}
+
 // MARK: - Remove-only (vim "dd", no filing into [N])
 
 /// Remove the selected track from the current playlist with no add step.

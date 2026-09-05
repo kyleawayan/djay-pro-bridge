@@ -14,6 +14,7 @@ import Foundation
 //   h / l      → beat jump back / forward (posts ⌥A / ⌥S)
 //   enter      → load selected track on Deck 1
 //   m          → membership readout
+//   esc        → press OK on djay's single-button alert ("Could not load track")
 //
 // Only fires with NO modifier held, so Cmd+1 etc. still reach djay. Needs the
 // process trusted for Accessibility (already required for the menu-driving);
@@ -22,6 +23,7 @@ import Foundation
 public enum KeyAction {
     case sort(Int)
     case removeFromPlaylist
+    case dismissAlert
     case navDown
     case navUp
     case beatBack
@@ -117,6 +119,14 @@ public final class KeyboardTrigger {
         if !event.flags.intersection(mods).isEmpty { return passthrough }
 
         let keycode = event.getIntegerValueField(.keyboardEventKeycode)
+
+        // Escape presses OK on djay's single-button alert ("Could not load track"),
+        // which has no Cancel button so Escape alone won't close it. Passed through
+        // (not swallowed) — harmless to djay, and a no-op when no such alert is up.
+        if keycode == 0x35 {
+            dispatch(.dismissAlert)
+            return passthrough
+        }
 
         // vim "dd": two `d` presses within the window remove from the current
         // playlist. A lone `d` is swallowed — djay's bare-key layer owns these keys.

@@ -11,6 +11,7 @@ import Foundation
 //   d d        remove the selected track from the current playlist (no filing)
 //   j / k      down / up the track list        h / l   beat jump back / forward
 //   enter      load selected track on Deck 1    m       show playlist membership
+//   esc        press OK on djay's "Could not load track" alert
 
 // MARK: - Args
 
@@ -108,6 +109,12 @@ let trigger = KeyboardTrigger(pid: pid) { action in
         case .noMenu:
             printError("\(stamp()) ⚠ dd: could not open djay's context menu")
         }
+    case .dismissAlert:
+        // Log only when an alert was actually dismissed — Escape fires this on
+        // every press, and a no-op shouldn't spam the console.
+        if dismissAlertOK(app) {
+            printError("\(stamp()) esc → dismissed alert (OK)")
+        }
     case .load:
         if loadSelectedTrackOnDeck1(app, pid: pid) {
             printError("\(stamp()) ⏵ loaded on Deck 1")
@@ -124,6 +131,6 @@ let trigger = KeyboardTrigger(pid: pid) { action in
 guard trigger.start() else { exit(1) }
 
 printError("Destinations mapped by \"[N] \" playlist-name prefix.")
-printError("Ready. djay frontmost:  1 2 3 5 8 = sort · dd = remove · j/k = up/down · enter = load Deck 1 · h/l = beat jump · m = membership.")
+printError("Ready. djay frontmost:  1 2 3 5 8 = sort · dd = remove · j/k = up/down · enter = load Deck 1 · h/l = beat jump · m = membership · esc = dismiss alert.")
 
 nsApp.run()
