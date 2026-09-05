@@ -37,6 +37,13 @@ public enum SortOutcome {
     case failed(String)
 }
 
+public enum RemoveOutcome {
+    case removed(track: String)
+    case notRemovable(track: String)   // current view offers no "Remove from Playlist" (e.g. a smart playlist)
+    case noSelection
+    case noMenu
+}
+
 // MARK: - Tree search
 
 func findFirst(in el: AXUIElement, maxDepth: Int = 18, depth: Int = 0,
@@ -297,6 +304,32 @@ func removeSelectedTrackFromCurrentPlaylist(_ app: AXUIElement, pid: pid_t) -> B
     postKey(kVKDelete, flags: .maskCommand)
     // Accept djay's confirm dialog by pressing its "Remove Item" button.
     return confirmRemoveDialog(app, timeoutMs: 1500)
+}
+
+// MARK: - Remove-only (vim "dd", no filing into [N])
+
+/// Remove the selected track from the current playlist with no add step.
+/// Guarded: presses the context menu's "Remove from Playlist" item directly, so
+/// it can only ever remove from a playlist — it never falls through to Cmd+Delete
+/// and a "Delete from library" dialog. The item is absent in views that can't be
+/// removed from (smart playlists, the full library), which reports .notRemovable.
+public func removeSelectedFromCurrentPlaylist(_ app: AXUIElement, pid: pid_t) -> RemoveOutcome {
+    guard getSelectedTrackRow(app) != nil else { return .noSelection }
+    let track = selectedTrackLabel(app) ?? "track"
+
+    guard let menu = openContextMenu(app) else { return .noMenu }
+    guard let item = waitForMenuItem(menu, titled: "Remove from Playlist", timeoutMs: 1200) else {
+        closeMenu(menu)
+        return .notRemovable(track: track)
+    }
+    performAction(item, kAXPressAction)   // dismisses the menu, removes the track
+    // Some views pop a confirm dialog for the removal; accept it if it shows.
+    _ = confirmRemoveDialog(app, timeoutMs: 1500)
+    // Pressing the item moved focus off the table; refocus so j/k keep working.
+    if let table = findSongTable(app) {
+        AXUIElementSetAttributeValue(table, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    }
+    return .removed(track: track)
 }
 
 // MARK: - Load on Deck 1

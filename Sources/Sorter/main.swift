@@ -8,6 +8,7 @@ import Foundation
 // bare keys while djay is frontmost (via CGEventTap — see KeyboardTrigger):
 //
 //   1 2 3 5 8  file the selected track into playlist "[N] …" + remove from current
+//   d d        remove the selected track from the current playlist (no filing)
 //   j / k      down / up the track list        h / l   beat jump back / forward
 //   enter      load selected track on Deck 1    m       show playlist membership
 
@@ -96,6 +97,17 @@ let trigger = KeyboardTrigger(pid: pid) { action in
     case .sort(let slot):
         let outcome = sortSelectedTrack(app, pid: pid, slot: slot)
         logOutcome(outcome, slot: slot)
+    case .removeFromPlaylist:
+        switch removeSelectedFromCurrentPlaylist(app, pid: pid) {
+        case .removed(let track):
+            printError("\(stamp()) \"\(track)\" → removed from current playlist ✓")
+        case .notRemovable(let track):
+            printError("\(stamp()) ⚠ dd \"\(track)\": current view has no 'Remove from Playlist'")
+        case .noSelection:
+            printError("\(stamp()) ⚠ dd: no track selected")
+        case .noMenu:
+            printError("\(stamp()) ⚠ dd: could not open djay's context menu")
+        }
     case .load:
         if loadSelectedTrackOnDeck1(app, pid: pid) {
             printError("\(stamp()) ⏵ loaded on Deck 1")
@@ -112,6 +124,6 @@ let trigger = KeyboardTrigger(pid: pid) { action in
 guard trigger.start() else { exit(1) }
 
 printError("Destinations mapped by \"[N] \" playlist-name prefix.")
-printError("Ready. djay frontmost:  1 2 3 5 8 = sort · j/k = up/down · enter = load Deck 1 · h/l = beat jump · m = membership.")
+printError("Ready. djay frontmost:  1 2 3 5 8 = sort · dd = remove · j/k = up/down · enter = load Deck 1 · h/l = beat jump · m = membership.")
 
 nsApp.run()

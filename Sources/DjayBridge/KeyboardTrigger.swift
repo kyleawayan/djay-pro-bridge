@@ -9,6 +9,7 @@ import Foundation
 // that nothing else uses, unusable for bare 1/j/k/h/l/enter/m).
 //
 //   1 2 3 5 8  → sort selected track into playlist "[N] …"
+//   d d        → remove selected track from current playlist (vim-style double-tap)
 //   j / k      → down / up the track list (posts ↓ / ↑)
 //   h / l      → beat jump back / forward (posts ⌥A / ⌥S)
 //   enter      → load selected track on Deck 1
@@ -20,6 +21,7 @@ import Foundation
 
 public enum KeyAction {
     case sort(Int)
+    case removeFromPlaylist
     case navDown
     case navUp
     case beatBack
@@ -35,6 +37,12 @@ public final class KeyboardTrigger {
     private let workQueue = DispatchQueue(label: "playlist-sort")
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+
+    // vim "dd": timestamp of the first `d`, matched by a second within the window.
+    // Touched only on the tap's run loop, so no locking needed.
+    private static let kVKd: Int64 = 0x02
+    private static let ddWindow: CFTimeInterval = 0.5
+    private var lastDPress: CFTimeInterval = 0
 
     // keycode (macOS virtual) → action.
     private static let map: [Int64: KeyAction] = [
@@ -109,6 +117,21 @@ public final class KeyboardTrigger {
         if !event.flags.intersection(mods).isEmpty { return passthrough }
 
         let keycode = event.getIntegerValueField(.keyboardEventKeycode)
+
+        // vim "dd": two `d` presses within the window remove from the current
+        // playlist. A lone `d` is swallowed — djay's bare-key layer owns these keys.
+        if keycode == Self.kVKd {
+            if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 { return nil }
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastDPress <= Self.ddWindow {
+                lastDPress = 0
+                dispatch(.removeFromPlaylist)
+            } else {
+                lastDPress = now
+            }
+            return nil
+        }
+
         guard let action = Self.map[keycode] else { return passthrough }
 
         // Swallow held-key repeats for menu actions so a hold can't double-fire.
