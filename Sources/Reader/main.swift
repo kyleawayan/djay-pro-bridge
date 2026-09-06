@@ -5,6 +5,9 @@ import Foundation
 
 var logMode = false
 var renderIntervalMs: UInt32 = 33  // ~30fps default
+var artnetHost: String? = nil
+var artnetPort: UInt16 = 6454  // Art-Net default port
+var artnetFramerate: ArtNetTimecodeSender.Framerate = .smpte30
 
 let args = CommandLine.arguments
 if let idx = args.firstIndex(of: "--interval"), idx + 1 < args.count,
@@ -14,6 +17,20 @@ if let idx = args.firstIndex(of: "--interval"), idx + 1 < args.count,
 if args.contains("--log") {
     logMode = true
 }
+if let idx = args.firstIndex(of: "--artnet-ip"), idx + 1 < args.count {
+    artnetHost = args[idx + 1]
+}
+if let idx = args.firstIndex(of: "--artnet-port"), idx + 1 < args.count,
+   let p = UInt16(args[idx + 1]) {
+    artnetPort = p
+}
+if let idx = args.firstIndex(of: "--fps"), idx + 1 < args.count {
+    guard let fr = ArtNetTimecodeSender.Framerate.parse(args[idx + 1]) else {
+        printError("Invalid --fps '\(args[idx + 1])'. Use 24, 25, 29.97, or 30.")
+        exit(1)
+    }
+    artnetFramerate = fr
+}
 
 // MARK: - Find djay Pro and check permissions
 
@@ -21,6 +38,13 @@ guard let djay = findDjayPro() else { exit(1) }
 guard checkAccessibilityPermission(djay.element) else { exit(1) }
 
 printError("🎧 Rendering at ~\(1000 / max(renderIntervalMs, 1))fps, polling AX in background... (Ctrl+C to stop)\n")
+
+// MARK: - Art-Net timecode
+
+let artnetSender: ArtNetTimecodeSender? = artnetHost.map {
+    printError("📡 Art-Net timecode → \($0):\(artnetPort)\n")
+    return ArtNetTimecodeSender(host: $0, port: artnetPort, framerate: artnetFramerate)
+}
 
 // MARK: - Thread-safe shared state
 
@@ -144,6 +168,19 @@ if !logMode {
 
 while true {
     let (deck1, deck2, e1, r1, e2, r2, crossfader, mainDeck) = state.snapshot()
+
+    // Send the main deck's interpolated elapsed time as Art-Net timecode.
+    if let sender = artnetSender {
+        let mainElapsed: Double?
+        switch mainDeck {
+        case 1: mainElapsed = e1
+        case 2: mainElapsed = e2
+        default: mainElapsed = nil
+        }
+        if let elapsed = mainElapsed {
+            sender.send(seconds: elapsed)
+        }
+    }
 
     if logMode {
         let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
