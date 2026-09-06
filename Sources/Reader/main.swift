@@ -60,7 +60,10 @@ class SharedState {
     private var _playDebounce1 = PlayStateDebouncer()
     private var _playDebounce2 = PlayStateDebouncer()
 
-    func updateFromAX(deck1: DeckInfo, deck2: DeckInfo, crossfader: String?) {
+    func updateFromAX(
+        deck1: DeckInfo, deck2: DeckInfo, crossfader: String?,
+        sampleTime1: Date, sampleTime2: Date
+    ) {
         lock.lock()
         var d1 = deck1
         var d2 = deck2
@@ -72,11 +75,11 @@ class SharedState {
         _mainDeck = _tracker.update(deck1: d1, deck2: d2, crossfader: crossfader)
         _interp1.update(
             elapsedTime: d1.elapsedTime, remainingTime: d1.remainingTime,
-            isPlaying: d1.isPlaying, bpmPercent: d1.bpmPercent
+            isPlaying: d1.isPlaying, bpmPercent: d1.bpmPercent, sampleTime: sampleTime1
         )
         _interp2.update(
             elapsedTime: d2.elapsedTime, remainingTime: d2.remainingTime,
-            isPlaying: d2.isPlaying, bpmPercent: d2.bpmPercent
+            isPlaying: d2.isPlaying, bpmPercent: d2.bpmPercent, sampleTime: sampleTime2
         )
         lock.unlock()
     }
@@ -103,10 +106,17 @@ let state = SharedState()
 let pollQueue = DispatchQueue(label: "ax-poll", qos: .userInitiated)
 pollQueue.async {
     while true {
+        // Stamp each deck's time at its read instant, not after the whole scan,
+        // so the interpolation baseline excludes the AX-scan latency.
+        let sampleTime1 = Date()
         let deck1 = getDeckInfo(app: djay.element, deckNumber: 1)
+        let sampleTime2 = Date()
         let deck2 = getDeckInfo(app: djay.element, deckNumber: 2)
         let crossfader = getCrossfader(app: djay.element)
-        state.updateFromAX(deck1: deck1, deck2: deck2, crossfader: crossfader)
+        state.updateFromAX(
+            deck1: deck1, deck2: deck2, crossfader: crossfader,
+            sampleTime1: sampleTime1, sampleTime2: sampleTime2
+        )
         // No sleep — poll as fast as AX allows (~8fps)
     }
 }
