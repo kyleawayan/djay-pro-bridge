@@ -74,6 +74,10 @@ swift test --filter 'SystemOne.*Tests'
 python3 -m unittest discover -s scripts/research -p 'test_*.py'
 ```
 
+## Community discussion
+
+[Original Algoriddim Community discussion: a ShowKontrol-like deck monitor for djay on macOS](https://community.algoriddim.com/t/created-a-showkontrol-like-deck-monitoring-tool-for-djay-on-macos/41823)
+
 ## Credits
 
 The packet debugger’s hex grid and fading byte-change highlights are inspired by [Dysentery by Deep Symmetry](https://github.com/Deep-Symmetry/dysentery), particularly its [Packet Window](https://github.com/Deep-Symmetry/dysentery/blob/main/doc/assets/PacketWindow.png). No Dysentery source code or screenshot assets are included.
