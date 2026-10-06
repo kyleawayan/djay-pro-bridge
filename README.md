@@ -194,6 +194,10 @@ Sync, CUE, Set start point, Jump to start point, Loop Half, Loop Double, Pitch B
 - **Play state detection delay (~700ms):** When a deck is paused, djay Pro's play/pause button flashes in the accessibility tree — rapidly alternating between "Active" and nil. To avoid false play detection, the reader debounces the paused-to-playing transition, requiring the button to report "Active" consistently for ~700ms before the deck is considered playing. Playing-to-paused detection is immediate.
 - **View-dependent data availability:** The accessibility tree changes based on djay Pro's current view mode. Some elements (elapsed/remaining time, beat jump buttons, etc.) may only be available in certain views.
 
+## Community discussion
+
+[Original Algoriddim Community discussion: a ShowKontrol-like deck monitor for djay on macOS](https://community.algoriddim.com/t/created-a-showkontrol-like-deck-monitoring-tool-for-djay-on-macos/41823)
+
 ## References
 
 The main deck algorithm is adapted from Pioneer DJ's sync master behavior, informed by:
