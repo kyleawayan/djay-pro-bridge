@@ -2,6 +2,9 @@
 
 A macOS tool that reads real-time deck state from [Algoriddim djay Pro](https://www.algoriddim.com/djay-pro-mac) using the macOS Accessibility API. This only supports djay Pro on Mac.
 
+> [!NOTE]
+> The experimental [SYSTEM ONE branch](https://github.com/kyleawayan/djay-pro-bridge/tree/poc/system-one-telemetry) decodes djay Pro’s RANE SYSTEM ONE screen protocol over MIDI SysEx, delivering much faster updates than Accessibility polling in testing—no controller required. Connecting can unload decks; see the branch README before trying it.
+
 [![Play Video (YouTube) — YouTube thumbnail with a large play button overlay. Left side shows a Traktor Kontrol hardware controller and an Ableton Push on a desk next to a screen running Algoriddim djay Pro, with a track loaded on deck 1 ("The Chase" by Hearts2Hearts, 126.0 BPM). Right side shows a terminal running `swift run Reader --serial-po…` displaying the djay Pro Bridge TUI: Deck 1 with track title, artist, Key: e, BPM: 126.0 (0.0%), Vol: 100%; Deck 2 empty. Bottom-right corner has a circular webcam inset of Kyle wearing headphones.](./yt-thumbnail.jpg)](https://www.youtube.com/watch?v=KYhucdsplHU)
 
 ## Table of Contents
