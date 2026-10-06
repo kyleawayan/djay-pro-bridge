@@ -19,22 +19,23 @@ A macOS tool that reads real-time deck state from [Algoriddim djay Pro](https://
     - [Action-Only Buttons (WIP)](#action-only-buttons-wip)
     - [Other (not per-deck)](#other-not-per-deck)
   - [Limitations](#limitations)
+  - [Experimental SYSTEM ONE packet debugger](#experimental-system-one-packet-debugger)
   - [References](#references)
   - [License](#license)
 
 ## Why
 
-djay Pro doesn't expose deck metadata (key, title, artist, BPM) to external software. There's no MIDI output for these values, no network protocol like Pioneer's Pro DJ Link, or any external software such as ShowKontrol for djay Pro.
+The production Reader extracts deck metadata through macOS Accessibility. This branch also includes an experimental SYSTEM ONE controller-protocol debugger that receives native metadata, library state and waveform data through MIDI SysEx; see the experimental section below.
 
 The first idea was to read djay Pro's memory directly, but this was quickly scrapped — macOS's System Integrity Protection (SIP) blocks cross-process memory reading, and disabling it would compromise system security. This was not worth it for me.
 
 The next idea was polling djay Pro's song database and tracking MIDI input to reconstruct state externally, but this would get out of sync fast — especially when the DJ shifts keys or loads tracks in ways the external tracker can't anticipate.
 
-The breakthrough (with some help from Claude) was discovering that macOS has Accessibility APIs that let you read text and values directly from any app's UI. djay Pro, being a Mac-native app, exposes a rich accessibility tree with labeled elements for every deck — key, title, artist, and more. The only way to get this data out without compromising system security is through the macOS Accessibility API, which reads the live UI state directly — including any key shifts or changes the DJ makes in real time.
+The breakthrough (with some help from Claude) was discovering that macOS has Accessibility APIs that let you read text and values directly from any app's UI. djay Pro, being a Mac-native app, exposes a rich accessibility tree with labeled elements for every deck — key, title, artist, and more. The macOS Accessibility API reads the live UI state directly, including key shifts and other changes, without changing runtime protections.
 
 ## Setup
 
-1. **Xcode Command Line Tools** must be installed.
+1. **Swift 6.2+** must be installed through Xcode or its Command Line Tools. This branch resolves SwiftProtobuf 1.38.1 through Swift Package Manager, including when building the Reader.
 
 2. **Grant Accessibility permission** to whatever runs the tool (Terminal, iTerm2, VSCode, etc.).
 
@@ -201,3 +202,42 @@ The main deck algorithm is adapted from Pioneer DJ's sync master behavior, infor
 ## License
 
 MIT
+
+
+## Experimental SYSTEM ONE packet debugger
+
+**Proof of concept, tested only with djay Pro 5.6.9 on macOS. Future djay updates may require changes; compatibility is not guaranteed.** This is a separate debugger, not the production Accessibility reader.
+
+**Before building:** requires macOS 13+, Swift 6.2+, and an installed djay Pro app for full decoding. At startup, the debugger reads the installed djay executable on disk to locate its embedded protobuf schema. It does not modify djay. No schema export or Swift type generation is needed to build or run the debugger.
+
+**Connecting can unload decks and change audio routing.** Connect before loading tracks. Disconnecting does not restore the previous djay state.
+
+1. Start djay Pro and run the debugger from this checkout:
+   ```sh
+   swift run SystemOneInspector
+   ```
+2. Press **Connect**, then load and play tracks in djay. All decks and Global/Library appear on one screen; expand the packet view for raw bytes and decoded fields.
+
+### How it works
+
+The debugger creates a temporary pair of SYSTEM ONE MIDI endpoints and sends one peer-identification keepalive after djay identifies itself. It reassembles incoming MIDI SysEx messages, unpacks their protobuf payloads, and uses the locally loaded schema to label fields. Captured data includes track metadata, playhead updates, artwork, library rows, waveform images and samples, beat grids, cues and loops. It sends no playback or browsing commands. No controller hardware is required for this tested Mac setup.
+
+Schema discovery searches for a recognizable descriptor rather than a fixed byte offset. Updates that change the descriptor or protocol may require extractor, decoder or UI changes. If schema loading fails, only limited numeric decoding remains available.
+
+### Optional protobuf export
+
+To export the protobuf schema from your installed djay app:
+
+```sh
+python3 scripts/research/extract_system_one_proto.py '/Applications/djay Pro.app'
+```
+
+The command prints a new temporary output directory containing the descriptor, descriptor set, reconstructed `.proto` and extraction metadata. Add `--swift` to generate Swift types with already-installed `protoc` and `protoc-gen-swift`. These exports are optional; the debugger loads its schema directly from djay.
+
+See [the debugger guide](docs/research/system-one-inspector.md), [CLI capture and image export commands](docs/research/system-one-cli.md), and [protocol findings](docs/research/system-one-protocol.md). Captures can contain library listings and artwork; keep them local.
+
+## Credits
+
+The packet debugger's hex-grid layout and fading byte-change highlights are inspired by [Dysentery by Deep Symmetry](https://github.com/Deep-Symmetry/dysentery), particularly its [Packet Window](https://github.com/Deep-Symmetry/dysentery/blob/main/doc/assets/PacketWindow.png). No Dysentery source code or screenshot assets are included.
+
+Protocol descriptor support uses [SwiftProtobuf](https://github.com/apple/swift-protobuf). Protocol exports are generated with [Protocol Buffers](https://github.com/protocolbuffers/protobuf) and SwiftProtobuf's Swift generator.

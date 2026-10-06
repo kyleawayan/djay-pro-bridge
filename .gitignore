@@ -1,3 +1,12 @@
 .build/
 .swiftpm/
 *.json
+
+# Recovered vendor schemas and generated types stay local.
+*.proto
+*.pb.swift
+*.descriptor.pb
+*.descriptorset.pb
+protocol-exports/
+
+.DS_Store
