@@ -18,6 +18,42 @@ final class OverviewStateTests: XCTestCase {
         DebugPacket(field: family, name: "synthetic", payload: blob(family, body), fields: [], image: nil,
                     waveform: waveform, waveformOffset: offset, status: "synthetic", deckIndex: deck, cacheIndex: nil)
     }
+    func testTimecodeInterpolatesSelectedDeckAndExpires() {
+        var clock = TelemetryTimecodeClock(deckIndex: 0)
+        clock.consume(packet(50, double(4, 48000) + integer(5, 4800000)), at: 0)
+        XCTAssertNil(clock.seconds(at: 0))
+        clock.consume(packet(51, double(2, 0.25) + double(3, 1.5)), at: 1)
+        XCTAssertEqual(clock.seconds(at: 1.2)!, 25.3, accuracy: 0.0001)
+        clock.consume(packet(51, double(2, 0.9), deck: 1), at: 1.3)
+        XCTAssertEqual(clock.seconds(at: 1.4)!, 25.6, accuracy: 0.0001)
+        XCTAssertNil(clock.seconds(at: 1.501))
+        XCTAssertNil(clock.seconds(at: 0.9))
+    }
+    func testTimecodePauseSeekReverseAndTrackReplacement() {
+        var clock = TelemetryTimecodeClock(deckIndex: 0)
+        let metadata = packet(50, double(4, 48000) + integer(5, 4800000))
+        clock.consume(metadata, at: 0)
+        clock.consume(packet(51, double(2, 0.5)), at: 1)
+        XCTAssertEqual(clock.seconds(at: 1.4), 50)
+        clock.consume(packet(51, double(2, 0.1) + double(3, -1)), at: 2)
+        XCTAssertEqual(clock.seconds(at: 2.25), 9.75)
+        clock.consume(metadata, at: 2.3)
+        XCTAssertNil(clock.seconds(at: 2.3))
+        clock.consume(packet(51, double(2, 0.8)), at: 3)
+        XCTAssertEqual(clock.seconds(at: 3), 80)
+        clock.consume(packet(55, []), at: 3.1)
+        XCTAssertNil(clock.seconds(at: 3.1))
+    }
+    func testTimecodeClampsToTrackBoundsAndRejectsMissingDuration() {
+        var clock = TelemetryTimecodeClock(deckIndex: 0)
+        clock.consume(packet(51, double(2, 0.5)), at: 0)
+        XCTAssertNil(clock.seconds(at: 0))
+        clock.consume(packet(50, double(4, 48000) + integer(5, 4800000)), at: 1)
+        clock.consume(packet(51, double(2, -0.1) + double(3, -1)), at: 2)
+        XCTAssertEqual(clock.seconds(at: 2), 0)
+        clock.consume(packet(51, double(2, 1) + double(3, 1)), at: 3)
+        XCTAssertEqual(clock.seconds(at: 3.25), 100)
+    }
     func testDurationAndElapsedUseReceivedSampleRateAndLength() {
         var state = OverviewState()
         state.consume(packet(50, string(2,"Example track") + string(3,"Example artist") + double(4,48000) + integer(5,4800000)))
@@ -57,4 +93,24 @@ final class OverviewStateTests: XCTestCase {
         XCTAssertEqual(state.decks[0]?.beatJumpLabel, "32 Beats")
         XCTAssertEqual(state.decks[1]?.loopLabel, "8 Beats")
     }
+    func testReusedImageSlotsDoNotChangePreviouslyAssignedArtwork() {
+        var state = OverviewState()
+        func image(_ bytes: [UInt8]) -> DebugPacket {
+            DebugPacket(field: 90, name: "synthetic", payload: blob(90, []), fields: [], image: Data(bytes),
+                        waveform: nil, waveformOffset: nil, status: "synthetic", deckIndex: nil, cacheIndex: 4)
+        }
+        state.consume(image([1,2,3]))
+        state.consume(packet(85, blob(4, integer(1,0) + string(2,"Track A") + integer(11,4)), deck: nil))
+        state.consume(packet(56, integer(2,4)))
+        state.consume(image([4,5,6]))
+        state.consume(packet(85, blob(4, integer(1,1) + string(2,"Track B") + integer(11,4)), deck: nil))
+        XCTAssertEqual(state.libraryRows[0]?.artwork, Data([1,2,3]))
+        XCTAssertEqual(state.libraryRows[1]?.artwork, Data([4,5,6]))
+        XCTAssertEqual(state.decks[0]?.artwork, Data([1,2,3]))
+        state.consume(packet(56, integer(2,4)))
+        XCTAssertEqual(state.decks[0]?.artwork, Data([4,5,6]))
+        state.consume(packet(55, []))
+        XCTAssertNil(state.decks[0]?.artwork)
+    }
+
 }

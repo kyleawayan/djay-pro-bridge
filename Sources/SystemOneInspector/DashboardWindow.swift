@@ -14,14 +14,22 @@ struct DashboardWindow: View {
                 Button(model.connected ? "Disconnect" : "Connect") { model.connected ? model.stop() : model.connect() }
                     .disabled(!model.connected && !model.canConnect)
                 Button("Open capture…", action: model.chooseCapture).disabled(model.busy)
-                Picker("Listen", selection: $model.duration) {
-                    Text("2 min").tag(120); Text("5 min").tag(300); Text("10 min").tag(600)
-                }.frame(width: 150).disabled(model.busy)
                 Toggle("Freeze", isOn: $model.freezeDisplay).toggleStyle(.checkbox)
                 Spacer()
                 Text(model.phase).foregroundStyle(model.connected ? .green : .secondary)
-                if model.connected { Text("\(model.secondsRemaining)s").monospacedDigit() }
                 if let directory = model.logDirectory { Button("Logs") { NSWorkspace.shared.open(directory) } }
+            }
+            HStack {
+                Button(model.recording ? "Stop Recording" : "Start Recording") {
+                    model.recording ? model.stopRecording() : model.startRecording()
+                }.disabled(!model.connected)
+                Button("Recording Folder…", action: model.chooseRecordingFolder).disabled(model.recording)
+                Text(model.recordingStatus).foregroundStyle(model.recording ? .red : .secondary)
+                if let directory = model.recordingDirectory {
+                    Button("Show Session") { NSWorkspace.shared.open(directory) }
+                }
+                Spacer()
+                Text("Connect before loading tracks; connection can reset decks.").font(.caption)
             }
             HStack {
                 Text(model.startupStatus)
@@ -66,7 +74,7 @@ struct DashboardWindow: View {
                     ForEach(state.libraryRows.values.sorted(by: { $0.id < $1.id })) { row in
                         GridRow {
                             Text("\(UInt64(row.id) + 1)").monospacedDigit()
-                            Artwork(data: row.artIndex.flatMap { model.state.store.images[$0]?.packet.image }, size: 30)
+                            Artwork(data: row.artwork, size: 30)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(row.title).lineLimit(1)
                                 if !row.artist.isEmpty { Text(row.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
@@ -110,7 +118,7 @@ private struct DeckPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                Artwork(data: deck.artIndex.flatMap { images[$0]?.packet.image }, size: 56)
+                Artwork(data: deck.artwork, size: 56)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Deck \(UInt64(index) + 1) · index \(index)").font(.caption).foregroundStyle(.secondary)
                     Text(deck.title.isEmpty ? "No track metadata received" : deck.title).font(.headline).lineLimit(2)

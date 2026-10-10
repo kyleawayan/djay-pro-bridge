@@ -87,3 +87,13 @@ Descriptor parsing uses [SwiftProtobuf](https://github.com/apple/swift-protobuf)
 ## License
 
 MIT
+
+## Record telemetry sessions
+
+1. Open the inspector and connect before loading tracks.
+2. Choose **Recording Folder…** once. The app remembers that folder in macOS preferences.
+3. Press **Start Recording**. Press **Stop Recording** to finish without disconnecting.
+
+Sessions contain `session.json`, readable `events.ndjson`, and deduplicated assets. Live listening continues until disconnected. CLI probes also run until Ctrl-C unless a positive `--seconds` is provided. Pending-work queues remain bounded; dropped data and disk failures are reported. Library and deck artwork retain the image assigned to them when reusable cache slots change.
+
+A `deck-artwork` event with `asset: null` clears a previously recorded cover. `created_at` remains the recording start time when the manifest is finalized. Terminal transport loss marks the session incomplete even when no later message arrives.

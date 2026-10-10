@@ -16,15 +16,15 @@ public final class MIDIProbeSession {
     private var started = false
     public private(set) var startupKeepaliveSent = false
 
-    public init(endpointName: String, identity: String, verbose: Bool = false,
+    public init(endpointName: String, identity: String, verbose: Bool = false, recordTraffic: Bool = false,
                 onWarning: ((String) -> Void)? = nil, onMessage: ((CapturedMessage) -> Void)? = nil) throws {
         self.endpointName = endpointName
         self.identity = identity
-        capture = try Capture(verbose: verbose, onMessage: onMessage, onWarning: onWarning)
+        capture = try Capture(verbose: verbose, recordTraffic: recordTraffic, onMessage: onMessage, onWarning: onWarning)
     }
 
-    public func start(seconds: Int) throws {
-        guard !started && !stopped && (1...600).contains(seconds) else {
+    public func start(seconds: Int?) throws {
+        guard !started && !stopped && seconds.map({ $0 > 0 }) ?? true else {
             throw TransportError("Invalid duration or session already used")
         }
         started = true
@@ -40,7 +40,9 @@ public final class MIDIProbeSession {
                 endpointNames[label + "_name"] = property(endpoint, kMIDIPropertyName) ?? "unavailable"
                 endpointNames[label + "_display_name"] = property(endpoint, kMIDIPropertyDisplayName) ?? "unavailable"
             }
-            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(seconds)) { [weak self] in self?.stop(reason: "duration") }
+            if let seconds {
+                DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(seconds)) { [weak self] in self?.stop(reason: "duration") }
+            }
         } catch {
             stopped = true
             _ = cleanup()
@@ -65,6 +67,14 @@ public final class MIDIProbeSession {
         try check(status, "MIDIReceived on the probe's own virtual source")
         startupKeepaliveSent = true
         capture.recordTransmission(bytes)
+    }
+
+    public func startRecording(_ recorder: TelemetryRecorder, at directory: URL) throws {
+        try capture.withSynchronizedDropCount { try recorder.start(at: directory, transportDroppedPackets: $0) }
+    }
+
+    public func stopRecording(_ recorder: TelemetryRecorder) throws {
+        try capture.withSynchronizedDropCount { try recorder.stop(transportDroppedPackets: $0) }
     }
 
     private func cleanup() -> Bool {

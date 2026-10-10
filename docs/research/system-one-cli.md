@@ -13,7 +13,7 @@ swift run SystemOneProbe --identity system-one-display \
 
 The probe creates temporary MIDI endpoints, waits for djay identification, sends one peer-identification keepalive, and records incoming traffic. It prints the capture directory. Omit `--startup-keepalive` for passive capture. No playback or browsing commands are sent.
 
-Ctrl-C or the duration limit ends capture and removes the endpoints. Logs include `traffic.ndjson` and `summary.json`. Capture is bounded by duration, bytes and packet count. Logs can contain library listings and artwork; keep them local.
+Ctrl-C or the duration limit ends capture and removes the endpoints. Logs include `traffic.ndjson` and `summary.json`. Capture runs until stopped unless an explicit duration is supplied. Pending-work queues stay bounded; lifetime byte and packet limits are removed. Logs can contain library listings and artwork; keep them local.
 
 ## Export images from a capture
 

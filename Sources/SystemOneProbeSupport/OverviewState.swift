@@ -7,9 +7,16 @@ public struct LibraryRow: Identifiable, Sendable {
     public var tempo: Double?
     public var key: String
     public var duration: Double?
+    public var artwork: Data? = nil
     public var artIndex: UInt32?
     public var kind: String
     public var packet: DebugPacket
+}
+
+public struct DeckLoopRegion: Sendable {
+    public let start: Double
+    public let end: Double
+    public let status: UInt64
 }
 
 public struct DeckOverview: Sendable {
@@ -21,6 +28,7 @@ public struct DeckOverview: Sendable {
     public var tempo: Double?
     public var key = ""
     public var loaded = false
+    public var artwork: Data? = nil
     public var artIndex: UInt32?
     public var overview: Data?
     public var detailChunks: [UInt64: [UInt8]] = [:]
@@ -31,6 +39,7 @@ public struct DeckOverview: Sendable {
     public var trackStart = 0.0
     public var cues: Set<UInt32> = []
     public var loops: Set<Int32> = []
+    public var loopRegions: [Int32: DeckLoopRegion] = [:]
     public var beatJumpLabel = ""
     public var speedRange = ""
     public var keyLock = false
@@ -48,6 +57,7 @@ public struct DeckOverview: Sendable {
 }
 
 public struct OverviewState: Sendable {
+    private var imageCache: [UInt32: Data] = [:]
     public private(set) var decks: [UInt32: DeckOverview] = [:]
     public private(set) var libraryTitle = ""
     public private(set) var libraryRows: [UInt32: LibraryRow] = [:]
@@ -58,6 +68,10 @@ public struct OverviewState: Sendable {
 
     public mutating func consume(_ packet: DebugPacket, received: Date = Date()) {
         guard let family = packet.field, let body = Body(packet) else { return }
+        if family == 90, let index = packet.cacheIndex, let image = packet.image {
+            if imageCache[index] != nil || imageCache.count < 128 { imageCache[index] = image }
+            return
+        }
         func named(_ name: String, depth: Int = 0) -> String {
             packet.fields.first { $0.depth == depth && $0.name.hasSuffix(": " + name) }?.value.components(separatedBy: " (").first ?? ""
         }
@@ -78,7 +92,9 @@ public struct OverviewState: Sendable {
             case 53: deck.key = named("key")
             case 54: deck.keyLock = body.uint(2, default: 0) != 0
             case 55: deck = DeckOverview()
-            case 56: deck.artIndex = body.index(2)
+            case 56:
+                deck.artIndex = body.index(2)
+                deck.artwork = imageCache[body.index(2)]
             case 58: deck.speedRange = body.text(2)
             case 61: deck.beatJumpLabel = body.text(2)
             case 59: deck.loopLabel = body.text(2)
@@ -103,9 +119,12 @@ public struct OverviewState: Sendable {
             case 67:
                 let cue = Int32(truncatingIfNeeded: body.uint(2, default: 0))
                 deck.loops.insert(cue); deck.loopPackets[cue] = packet
+                if let start = body.loopBoundary(3), let end = body.loopBoundary(4), end > start {
+                    deck.loopRegions[cue] = DeckLoopRegion(start: start, end: end, status: body.uint(7, default: 0))
+                } else { deck.loopRegions[cue] = nil }
             case 68:
                 let cue = Int32(truncatingIfNeeded: body.uint(2, default: 0))
-                deck.loops.remove(cue); deck.loopPackets.removeValue(forKey: cue)
+                deck.loops.remove(cue); deck.loopPackets.removeValue(forKey: cue); deck.loopRegions[cue] = nil
             case 69: deck.overview = packet.image
             case 70: deck.title = body.text(2)
             case 71: deck.artist = body.text(2)
@@ -136,10 +155,10 @@ public struct OverviewState: Sendable {
                 case 4:
                     libraryRows[row] = LibraryRow(id: row, title: item.text(2), artist: item.text(3),
                         tempo: item.uint(6).map(Double.init), key: named("key", depth: 1),
-                        duration: item.uint(7).map(Double.init), artIndex: item.index(11), kind: "track", packet: packet)
+                        duration: item.uint(7).map(Double.init), artwork: imageCache[item.index(11)], artIndex: item.index(11), kind: "track", packet: packet)
                 case 3:
                     libraryRows[row] = LibraryRow(id: row, title: item.text(2), artist: item.text(5), tempo: nil,
-                        key: "", duration: nil, artIndex: item.index(6), kind: "playlist", packet: packet)
+                        key: "", duration: nil, artwork: imageCache[item.index(6)], artIndex: item.index(6), kind: "playlist", packet: packet)
                 case 2,5:
                     libraryRows[row] = LibraryRow(id: row, title: item.text(2), artist: "", tempo: nil,
                         key: "", duration: nil, artIndex: nil, kind: field == 2 ? "label" : "button", packet: packet)
@@ -173,6 +192,12 @@ private struct Body {
     }
     func uint(_ number: UInt64, default fallback: UInt64) -> UInt64 { uint(number) ?? fallback }
     func index(_ number: UInt64) -> UInt32 { UInt32(truncatingIfNeeded: uint(number, default: 0)) }
+    func loopBoundary(_ number: UInt64) -> Double? {
+        guard let encoded = value(number) else { return 0 }
+        guard case .fixed64(let bits) = encoded else { return nil }
+        let result = Double(bitPattern: bits)
+        return result.isFinite ? result : nil
+    }
     func number(_ number: UInt64) -> Double? {
         let result: Double
         switch value(number) {

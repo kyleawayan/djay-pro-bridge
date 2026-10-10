@@ -127,9 +127,14 @@ public enum PacketDebugger {
             var waveform: [UInt8]?
             var offset: UInt64?
             if top.0 == 62, let data = bytes(3), data.count % 4 == 0 {
-                waveform = data
-                if case .integer(let value) = nested.last(where: { $0.0 == 2 })?.1 { offset = value }
-                else { offset = 0 }
+                let value = nested.last(where: { $0.0 == 2 })?.1
+                let candidate: UInt64?
+                if case .integer(let raw) = value { candidate = raw }
+                else { candidate = value == nil ? 0 : nil }
+                if let candidate, candidate <= UInt32.max {
+                    waveform = data
+                    offset = candidate
+                }
             }
             let image = [UInt64(69), 90, 94].contains(top.0) ? bytes(2).map { Data($0) } : nil
             let fallback: [UInt64: String] = [1:"keep_alive",51:"set_deck_playhead_position",62:"update_waveform_chunk",63:"set_deck_beatgrid",69:"set_deck_overview_waveform",90:"set_album_art_image"]

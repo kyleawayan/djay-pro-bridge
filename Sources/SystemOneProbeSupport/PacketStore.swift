@@ -47,7 +47,8 @@ public struct PacketStore: Sendable {
         let entries = latest.values.reduce(0) { $0 + $1.count }
         guard entries < 512 || previousFamily != nil else { return }
         func changes(_ bytes: [UInt8], old: [UInt8], times: [Date]) -> [Date] {
-            bytes.enumerated().map { index, byte in
+            // Byte highlighting is diagnostic; large images must not allocate a Date per byte.
+            bytes.prefix(4096).enumerated().map { index, byte in
                 index < old.count && index < times.count && old[index] == byte ? times[index] : received
             }
         }

@@ -55,7 +55,11 @@ final class InspectorModel: ObservableObject {
     @Published var phase = "Disconnected"
     @Published var error: String?
     @Published var identity = "system-one-display"
-    @Published var duration = 300
+    @Published var recordingParent = UserDefaults.standard.string(forKey: "telemetry.recordingFolder").map { URL(fileURLWithPath: $0) }
+    @Published var recordingDirectory: URL?
+    @Published var recording = false
+    @Published var recordingStatus = "Not recording"
+    private let recorder = TelemetryRecorder()
     @Published var selectedType: UInt64 = 51
     @Published var selectedScope: PacketScope = .deck(0)
     @Published var selectedImageIndex: UInt32 = 0
@@ -69,12 +73,13 @@ final class InspectorModel: ObservableObject {
     private var assembler = MessageAssembler()
     @Published var logDirectory: URL?
     @Published var endpointNames: [String: String] = [:]
-    @Published var deadline: Date?
     @Published var now = Date()
     private var session: MIDIProbeSession?
     private var token = UUID()
     private var buffer = InspectorState()
-    private lazy var uiUpdates = CoalescedUpdate { [weak self] in
+    private lazy var uiUpdates = CoalescedUpdate(schedule: { action in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 30.0) { action() }
+    }) { [weak self] in
         guard let self else { return }
         self.state = self.buffer
         self.now = Date()
@@ -94,12 +99,14 @@ final class InspectorModel: ObservableObject {
         return scopedPackets[selectedType]
     }
     var canConnect: Bool { !busy }
-    var secondsRemaining: Int { max(0, Int(ceil(deadline?.timeIntervalSince(now) ?? 0))) }
 
     init(schemaLoader: ((@escaping (Result<ProtocolCatalog, Error>) -> Void) -> Void)? = nil) {
-        // This only advances the countdown; packet publication is event-driven.
         timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect().sink { [weak self] date in
-            guard let self, self.deadline != nil, !self.freezeDisplay else { return }
+            guard let self else { return }
+            if self.recording {
+                let status = self.recorder.status
+                self.recordingStatus = status.error ?? ByteCountFormatter.string(fromByteCount: Int64(status.bytes), countStyle: .file)
+            }
             self.now = date
         }
         if let schemaLoader {
@@ -133,19 +140,23 @@ final class InspectorModel: ObservableObject {
     func connect() {
         guard canConnect else { return }
         reset()
+        recorder.reset()
         phase = "Connecting"
         startupStatus = identity == "system-one-display" ? "Waiting for djay identification" : "Passive comparison"
         let currentToken = token
+        let recorder = self.recorder
+        let recordingCatalog = self.catalog
         DispatchQueue.main.async { [weak self] in
             guard let self, self.token == currentToken else { return }
             do {
                 let endpoint = self.identity == "generic" ? "Bridge Telemetry Probe Port 2" : "Rane SYSTEM ONE Port 2"
-                let session = try MIDIProbeSession(endpointName: endpoint, identity: self.identity, onWarning: { [weak self] warning in
+                let session = try MIDIProbeSession(endpointName: endpoint, identity: self.identity, recordTraffic: false, onWarning: { [weak self] warning in
                     DispatchQueue.main.async { [weak self] in
                         guard let self, self.token == currentToken else { return }
                         self.error = warning
                     }
                 }) { [weak self] message in
+                    recorder.consume(message, catalog: recordingCatalog)
                     let decoded = SystemOneDecoder.decode(message.bytes)
                     DispatchQueue.main.async { [weak self] in
                         guard let self, self.token == currentToken else { return }
@@ -165,15 +176,14 @@ final class InspectorModel: ObservableObject {
                 self.session = session
                 session.onStop = { [weak self] saved, reason in
                     guard let self, self.token == currentToken else { return }
+                    self.stopRecording()
                     self.session = nil
-                    self.deadline = nil
                     self.phase = saved ? "Stopped · \(reason == "duration" ? "time limit" : "disconnected")" : "Stopped with error"
                     if !saved { self.error = "Log finalization or MIDI cleanup failed. Inspect the local summary before reconnecting." }
                 }
                 self.logDirectory = session.directory
-                try session.start(seconds: self.duration)
+                try session.start(seconds: nil)
                 self.endpointNames = session.endpointNames
-                self.deadline = Date().addingTimeInterval(TimeInterval(self.duration))
                 self.phase = "Listening"
             } catch {
                 self.session = nil
@@ -184,6 +194,41 @@ final class InspectorModel: ObservableObject {
     }
 
     func stop() { session?.stop() }
+
+    func startRecording() {
+        guard let session, !recording else { return }
+        guard catalog != nil else { error = "Recording requires the installed djay schema. Reopen after schema loading succeeds."; return }
+        if recordingParent == nil { chooseRecordingFolder() }
+        guard let parent = recordingParent else { return }
+        let folder = parent.appendingPathComponent("session-" + UUID().uuidString)
+        do {
+            try session.startRecording(recorder, at: folder)
+            recordingDirectory = folder
+            recording = true
+            recordingStatus = "Recording"
+        } catch { self.error = error.localizedDescription }
+    }
+
+    func chooseRecordingFolder() {
+        guard !recording else { return }
+        let panel = NSOpenPanel()
+        panel.title = "Choose a folder for telemetry sessions"
+        panel.canChooseFiles = false; panel.canChooseDirectories = true; panel.canCreateDirectories = true
+        panel.directoryURL = recordingParent
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        recordingParent = url
+        UserDefaults.standard.set(url.path, forKey: "telemetry.recordingFolder")
+    }
+
+    func stopRecording() {
+        guard recording else { return }
+        do {
+            if let session { try session.stopRecording(recorder) } else { try recorder.stop() }
+            recordingStatus = "Saved"
+        }
+        catch { self.error = error.localizedDescription; recordingStatus = "Incomplete recording" }
+        recording = false
+    }
 
     private func reset() {
         token = UUID()

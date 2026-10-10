@@ -10,7 +10,7 @@ struct ProbeError: Error, CustomStringConvertible {
 
 struct Options {
     var identity = "generic"
-    var seconds = 15
+    var seconds: Int? = nil
     var confirmsEmptyDecks = false
     var acceptsDeckChanges = false
     var startupKeepalive = false
@@ -30,8 +30,8 @@ struct Options {
                 }
                 result.identity = value
             case "--seconds":
-                guard let value = args.popFirst(), let seconds = Int(value), (1...120).contains(seconds) else {
-                    throw ProbeError("--seconds requires an integer from 1 to 120")
+                guard let value = args.popFirst(), let seconds = Int(value), seconds > 0 else {
+                    throw ProbeError("--seconds requires a positive integer")
                 }
                 result.seconds = seconds
             case "--startup-keepalive": result.startupKeepalive = true
@@ -58,13 +58,13 @@ final class Probe {
     init(options: Options) { self.options = options }
 
     func start() throws {
-        let session = try MIDIProbeSession(endpointName: options.endpointName, identity: options.identity, verbose: true, onMessage: { [weak self] message in
+        let session = try MIDIProbeSession(endpointName: options.endpointName, identity: options.identity, verbose: true, recordTraffic: true, onMessage: { [weak self] message in
             DispatchQueue.main.async { [weak self] in self?.received(message) }
         })
         self.session = session
         session.onStop = { saved, _ in exit(saved ? 0 : 1) }
         try session.start(seconds: options.seconds)
-        print("Listening for \(options.seconds) seconds: \(options.endpointName)")
+        print("Listening \(options.seconds.map { "for \($0) seconds" } ?? "until Ctrl-C"): \(options.endpointName)")
         print(options.startupKeepalive ? "One peer-identification keepalive will be sent after djay identification. No playback or browsing commands." : "Passive capture: no messages sent.")
         print("Capture directory: \(session.directory.path)")
         for key in session.endpointNames.keys.sorted() { print("\(key): \(session.endpointNames[key]!)") }
@@ -97,7 +97,7 @@ if CommandLine.arguments.dropFirst().contains("--help") {
     print("""
     Usage: SystemOneProbe [--identity generic|system-one-display] [--seconds 15] [--confirm-empty-decks | --accept-deck-changes] [--startup-keepalive]
 
-    Default: a neutral source/destination pair, listening for 15 seconds.
+    Default: a neutral source/destination pair, listening until Ctrl-C.
     SYSTEM ONE mode uses Rane SYSTEM ONE Port 2. Recognition can unload tracks or change routing.
     Use --confirm-empty-decks for an idle session with every deck empty.
     --accept-deck-changes explicitly permits testing with loaded decks despite possible unloading/routing changes.

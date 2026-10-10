@@ -44,9 +44,6 @@ struct PacketWindow: View {
                     Text("SYSTEM ONE Port 2").tag("system-one-display")
                     Text("Neutral").tag("generic")
                 }.frame(width: 255).disabled(model.busy)
-                Picker("Duration", selection: $model.duration) {
-                    Text("2 min").tag(120); Text("5 min").tag(300); Text("10 min").tag(600)
-                }.frame(width: 150).disabled(model.busy)
                 Button(model.connected ? "Disconnect" : "Connect") { model.connected ? model.stop() : model.connect() }
                     .disabled(!model.connected && !model.canConnect)
                 Button("Open capture…", action: model.chooseCapture).disabled(model.busy)
@@ -56,7 +53,6 @@ struct PacketWindow: View {
             }
             HStack {
                 Text("packets=\(model.state.packets)  sysex=\(model.state.messages)  rx=\(model.state.bytes) B  tx=\(model.state.transmittedBytes) B")
-                if model.connected { Text("stop in \(model.secondsRemaining)s") }
                 Spacer()
                 if let directory = model.logDirectory { Button("Local logs") { NSWorkspace.shared.open(directory) } }
             }.font(.system(.caption, design: .monospaced))
