@@ -11,6 +11,8 @@ public final class TelemetryRecorder: @unchecked Sendable {
     private var overview = OverviewState()
     private var recordedArtwork: [UInt32: Data] = [:]
     private var handle: FileHandle?
+    private var obsHandle: FileHandle?
+    private var obsBuffer = Data()
     private var directory: URL?
     private var origin: UInt64 = 0
     private var createdAt = Date()
@@ -85,10 +87,13 @@ public final class TelemetryRecorder: @unchecked Sendable {
             let events = directory.appendingPathComponent("events.ndjson")
             guard FileManager.default.createFile(atPath: events.path, contents: nil) else { throw RecorderError("Cannot create events file") }
             handle = try FileHandle(forWritingTo: events)
+            let obs = directory.appendingPathComponent("obs-sync.ndjson")
+            guard FileManager.default.createFile(atPath: obs.path, contents: nil) else { throw RecorderError("Cannot create OBS sync file") }
+            obsHandle = try FileHandle(forWritingTo: obs)
             origin = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             createdAt = now()
             if let transportDroppedPackets { transportDropped = transportDroppedPackets }
-            failure = nil; previous = [:]; recordedArtwork = [:]; buffer = Data(); bytesWritten = 0
+            failure = nil; previous = [:]; recordedArtwork = [:]; buffer = Data(); obsBuffer = Data(); bytesWritten = 0
             gate.lock(); dropped = 0; gate.unlock()
             do {
                 try manifest(complete: false)
@@ -103,7 +108,7 @@ public final class TelemetryRecorder: @unchecked Sendable {
                 }
                 flush()
                 if let failure { throw RecorderError(failure) }
-            } catch { try? handle?.close(); handle = nil; throw error }
+            } catch { try? handle?.close(); handle = nil; try? obsHandle?.close(); obsHandle = nil; throw error }
         }
     }
 
@@ -115,13 +120,31 @@ public final class TelemetryRecorder: @unchecked Sendable {
                 fail(RecorderError("Incoming transport dropped telemetry; recording is incomplete"))
             }
             flush()
-            do { try handle?.synchronize(); try handle?.close() }
-            catch { fail(error); try? handle?.close() }
-            handle = nil
+            do { try handle?.synchronize(); try handle?.close(); try obsHandle?.synchronize(); try obsHandle?.close() }
+            catch { fail(error); try? handle?.close(); try? obsHandle?.close() }
+            handle = nil; obsHandle = nil
             gate.lock(); let omitted = dropped; gate.unlock()
             if omitted > 0 { failure = "\(omitted) incoming messages omitted; session is incomplete" }
             try manifest(complete: failure == nil)
             if let failure { throw RecorderError(failure) }
+        }
+    }
+
+    /// `CLOCK_UPTIME_RAW` value that event `t` values are measured from, while recording.
+    public var clockOrigin: UInt64? { queue.sync { handle == nil ? nil : origin } }
+
+    /// Writes an OBS round trip to `obs-sync.ndjson`, timed at the midpoint between request and reply.
+    public func record(_ sample: OBSSyncSample) {
+        queue.async { [self] in
+            emitOBS(["kind": "sample", "t": seconds(sample.midNS), "rtt_ms": sample.rttMS, "video_ms": sample.videoMS,
+                     "active": sample.active, "paused": sample.paused])
+        }
+    }
+
+    public func record(_ state: OBSRecordState) {
+        queue.async { [self] in
+            emitOBS(["kind": "state", "t": seconds(state.receivedNS), "state": state.state, "active": state.active,
+                     "path": state.path as Any? ?? NSNull()])
         }
     }
 
@@ -184,9 +207,27 @@ public final class TelemetryRecorder: @unchecked Sendable {
         } catch { fail(error) }
     }
 
-    private func flush() {
-        guard let handle, !buffer.isEmpty, failure == nil else { return }
+    private func emitOBS(_ event: [String: Any]) {
+        guard obsHandle != nil, failure == nil else { return }
         do {
+            obsBuffer.append(try JSONSerialization.data(withJSONObject: event, options: [.sortedKeys]))
+            obsBuffer.append(10)
+        } catch { fail(error) }
+    }
+
+    private func seconds(_ clock: UInt64) -> Double {
+        clock >= origin ? Double(clock - origin) / 1e9 : -Double(origin - clock) / 1e9
+    }
+
+    private func flush() {
+        guard failure == nil else { return }
+        do {
+            if let obsHandle, !obsBuffer.isEmpty {
+                try obsHandle.write(contentsOf: obsBuffer)
+                bytesWritten += obsBuffer.count
+                obsBuffer.removeAll(keepingCapacity: true)
+            }
+            guard let handle, !buffer.isEmpty else { return }
             try handle.write(contentsOf: buffer)
             bytesWritten += buffer.count
             buffer.removeAll(keepingCapacity: true)
@@ -197,13 +238,13 @@ public final class TelemetryRecorder: @unchecked Sendable {
     private func manifest(complete: Bool) throws {
         guard let directory else { return }
         let data: [String: Any] = ["version": 1, "clock": "monotonic-ns", "clock_origin_ns": String(origin), "clock_source": "CLOCK_UPTIME_RAW",
-            "created_at": ISO8601DateFormatter().string(from: createdAt), "events": "events.ndjson",
+            "created_at": ISO8601DateFormatter().string(from: createdAt), "events": "events.ndjson", "obs_sync": "obs-sync.ndjson",
             "waveform_samples_per_second": 315, "complete": complete, "error": failure as Any? ?? NSNull()]
         try JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys])
             .write(to: directory.appendingPathComponent("session.json"), options: .atomic)
     }
-    private func fail(_ error: Error) { if failure == nil { failure = error.localizedDescription; onFailure?(failure!) }; buffer.removeAll() }
-    deinit { timer?.cancel(); try? handle?.close() }
+    private func fail(_ error: Error) { if failure == nil { failure = error.localizedDescription; onFailure?(failure!) }; buffer.removeAll(); obsBuffer.removeAll() }
+    deinit { timer?.cancel(); try? handle?.close(); try? obsHandle?.close() }
 }
 
 public struct RecorderError: LocalizedError {

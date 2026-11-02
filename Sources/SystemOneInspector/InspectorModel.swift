@@ -60,6 +60,14 @@ final class InspectorModel: ObservableObject {
     @Published var recording = false
     @Published var recordingStatus = "Not recording"
     private let recorder = TelemetryRecorder()
+    @Published var obsHost = UserDefaults.standard.string(forKey: "obs.host") ?? ""
+    @Published var obsPort = UserDefaults.standard.object(forKey: "obs.port") as? Int ?? 4455
+    @Published var obsPassword = OBSPasswordStore.load()
+    @Published var obsStatus: OBSConnectionStatus = .disconnected
+    @Published var obsSummary = "OBS not connected"
+    private var obsClient: OBSClient?
+    private var obsSamples: [OBSSyncSample] = []
+    private var obsLastState: OBSRecordState?
     @Published var selectedType: UInt64 = 51
     @Published var selectedScope: PacketScope = .deck(0)
     @Published var selectedImageIndex: UInt32 = 0
@@ -194,6 +202,83 @@ final class InspectorModel: ObservableObject {
     }
 
     func stop() { session?.stop() }
+
+    var obsActive: Bool { obsClient != nil }
+
+    func connectOBS() {
+        guard obsClient == nil else { return }
+        UserDefaults.standard.set(obsHost, forKey: "obs.host")
+        UserDefaults.standard.set(obsPort, forKey: "obs.port")
+        OBSPasswordStore.save(obsPassword)
+        do {
+            let client = try OBSClient(host: obsHost, port: obsPort, password: obsPassword.isEmpty ? nil : obsPassword)
+            let recorder = self.recorder
+            client.onStatus = { [weak self] status in
+                DispatchQueue.main.async { [weak self] in self?.updateOBS(status: status, client: client) }
+            }
+            client.onSample = { [weak self] sample in
+                recorder.record(sample)
+                DispatchQueue.main.async { [weak self] in self?.receiveOBS(sample, client: client) }
+            }
+            client.onRecordState = { [weak self] state in
+                recorder.record(state)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.obsClient === client else { return }
+                    self.obsLastState = state
+                    if !state.active { self.obsSamples = [] }
+                }
+            }
+            obsClient = client
+            obsSamples = []
+            obsLastState = nil
+            client.start()
+        } catch {
+            obsStatus = .failed(error.localizedDescription)
+            obsSummary = error.localizedDescription
+        }
+    }
+
+    func disconnectOBS() {
+        obsClient?.stop()
+        obsClient = nil
+        obsStatus = .disconnected
+        obsSummary = "OBS not connected"
+    }
+
+    private func updateOBS(status: OBSConnectionStatus, client: OBSClient) {
+        guard obsClient === client else { return }
+        obsStatus = status
+        switch status {
+        case .disconnected: obsSummary = "OBS not connected"
+        case .connecting: obsSummary = "Connecting to OBS…"
+        case .connected: obsSummary = "Connected · waiting for status"
+        case .retrying(let reason): obsSummary = "Reconnecting · \(reason)"
+        case .failed(let reason): obsSummary = reason; obsClient = nil
+        }
+    }
+
+    private func receiveOBS(_ sample: OBSSyncSample, client: OBSClient) {
+        guard obsClient === client else { return }
+        if sample.active {
+            obsSamples.append(sample)
+            if obsSamples.count > 300 { obsSamples.removeFirst(obsSamples.count - 300) }
+        }
+        let rtt = String(format: "RTT %.1f ms", sample.rttMS)
+        guard sample.active else { obsSummary = "Connected · OBS not recording · \(rtt)"; return }
+        let position = Self.clockLabel(sample.videoMS / 1000)
+        if let fit = OBSSyncFit.fit(obsSamples, originNS: obsSamples[0].sentNS) {
+            obsSummary = String(format: "OBS %@ %@ · %@ · best %.1f ms · spread %.1f ms over %d samples",
+                                sample.paused ? "paused at" : "recording", position, rtt, fit.bestRTTMS, fit.residualMS, fit.used)
+        } else {
+            obsSummary = "OBS \(sample.paused ? "paused at" : "recording") \(position) · \(rtt)"
+        }
+        if !recording { obsSummary += " · start telemetry recording to save sync" }
+    }
+
+    private static func clockLabel(_ seconds: Double) -> String {
+        let total = Int(max(0, seconds))
+        return String(format: "%d:%02d:%02d", total / 3600, total / 60 % 60, total % 60)
+    }
 
     func startRecording() {
         guard let session, !recording else { return }

@@ -34,6 +34,7 @@ for resource in args.binary.parent.glob('*.bundle'):
     'CFBundleVersion': '1',
     'LSMinimumSystemVersion': '13.0',
     'NSHighResolutionCapable': True,
+    'NSLocalNetworkUsageDescription': 'Connects to OBS on another computer to align recordings with telemetry.',
     'NSPrincipalClass': 'NSApplication',
 }))
 print(args.output.resolve())

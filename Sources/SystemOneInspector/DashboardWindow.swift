@@ -32,6 +32,18 @@ struct DashboardWindow: View {
                 Text("Connect before loading tracks; connection can reset decks.").font(.caption)
             }
             HStack {
+                Text("OBS").bold()
+                TextField("OBS computer address", text: $model.obsHost).frame(width: 170).disabled(model.obsActive)
+                TextField("Port", value: $model.obsPort, format: .number.grouping(.never)).frame(width: 60).disabled(model.obsActive)
+                SecureField("WebSocket password", text: $model.obsPassword).frame(width: 150).disabled(model.obsActive)
+                Button(model.obsActive ? "Disconnect OBS" : "Connect OBS") {
+                    model.obsActive ? model.disconnectOBS() : model.connectOBS()
+                }
+                Text(model.obsSummary).lineLimit(1).truncationMode(.middle)
+                    .foregroundStyle(obsColor)
+                Spacer()
+            }.textFieldStyle(.roundedBorder)
+            HStack {
                 Text(model.startupStatus)
                 Spacer()
                 Text("\(model.state.messages) SysEx · RX \(ByteCountFormatter.string(fromByteCount: Int64(model.state.bytes), countStyle: .file)) · TX \(model.state.transmittedBytes) B")
@@ -51,6 +63,14 @@ struct DashboardWindow: View {
                 }.padding(.bottom, 10)
             }
         }.padding(12)
+    }
+
+    private var obsColor: Color {
+        switch model.obsStatus {
+        case .connected: return .green
+        case .retrying, .failed: return .orange
+        default: return .secondary
+        }
     }
 
     private var libraryPanel: some View {

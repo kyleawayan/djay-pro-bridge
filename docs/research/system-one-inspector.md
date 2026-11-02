@@ -42,6 +42,28 @@ The packaging helper creates a new local app bundle and refuses to overwrite an 
 
 See [how it works](system-one-protocol.md), [CLI capture and export](system-one-cli.md), and [credits](../../README.md#credits).
 
+## Sync with OBS on another computer
+
+The debugger can align recordings with OBS running on a separate computer, such as a Windows PC, over the local network. Nothing is installed on the OBS computer; OBS 28 and later include the WebSocket server.
+
+1. In OBS, open **Tools → WebSocket Server Settings**, enable the server, and note the port and password.
+2. In the debugger's **OBS** row, enter the OBS computer's IP address, port and password, then press **Connect OBS**.
+3. Start telemetry recording as usual. Sync data is saved only while telemetry recording is active.
+4. Record in OBS. The status line shows the recording position, round-trip time and fit quality.
+
+Once per second, the debugger asks OBS for its recording position and stamps the request and reply with the Mac's clock. The OBS computer's clock is never used. Slow round trips are discarded when fitting, so Wi-Fi works; venue networks that block device-to-device traffic do not. Use a hotspot from the OBS computer in that case. Dropped connections retry every 2 seconds until **Disconnect OBS**.
+
+The password is stored in the macOS Keychain. macOS may ask for Local Network permission on first connect.
+
+### OBS sync format
+
+`obs-sync.ndjson` sits beside `events.ndjson` and is named by `obs_sync` in `session.json`. `t` uses the same clock origin as events; values can be slightly negative for a request sent just before recording started.
+
+- `{"kind":"sample","t","rtt_ms","video_ms","active","paused"}` — `t` is the midpoint between request and reply. `video_ms` is OBS's `outputDuration`, which steps once per video frame.
+- `{"kind":"state","t","state","active","path"}` — a `RecordStateChanged` event, timed on arrival. `path` is the recording file on the OBS computer once recording stops.
+
+To map telemetry to video, fit `video_ms = a + b·t` per recording, keeping samples whose `rtt_ms` is within max(1.5 × best, best + 2 ms). `OBSSyncFit` implements this. The slope absorbs clock-rate differences between the two computers. Two limits remain unverified with live equipment: whether `outputDuration` stops advancing during an OBS pause, and the fixed delay between OBS's frame count and what the camera saw. Check both with a clap or flash test and use the editor's sync offset for any constant remainder.
+
 ## Session recording format
 
 Start/Stop Recording writes a general-purpose telemetry session independently of display refresh. Each session contains `session.json`, `events.ndjson` and content-addressed assets. The manifest uses `monotonic-ns` with `CLOCK_UPTIME_RAW`; event `t` values are seconds since `clock_origin_ns`. `created_at` is the recording start time.
