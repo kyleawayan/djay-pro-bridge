@@ -21,6 +21,7 @@ public final class OBSClient: @unchecked Sendable {
     private var timer: DispatchSourceTimer?
     private var retry: DispatchWorkItem?
     private var pending: [String: UInt64] = [:]
+    private var commands: [String: @Sendable (String?) -> Void] = [:]
     private var nextID = 0
     private var identified = false
     private var stopped = false
@@ -78,6 +79,9 @@ public final class OBSClient: @unchecked Sendable {
         connection?.stateUpdateHandler = nil
         connection?.cancel(); connection = nil
         pending = [:]; identified = false
+        let abandoned = commands.values
+        commands = [:]
+        abandoned.forEach { $0("OBS connection lost") }
     }
 
     /// Wi-Fi drops are expected on the road; keep retrying until the user disconnects.
@@ -144,12 +148,26 @@ public final class OBSClient: @unchecked Sendable {
         case .recordStatus(let id, let active, let paused, let videoMS):
             guard let sent = pending.removeValue(forKey: id) else { return }
             onSample?(OBSSyncSample(sentNS: sent, receivedNS: receivedNS, active: active, paused: paused, videoMS: videoMS))
-        case .requestFailed(let id, _):
+        case .requestFailed(let id, let comment):
             pending[id] = nil
+            commands.removeValue(forKey: id)?(comment)
+        case .requestSucceeded(let id):
+            commands.removeValue(forKey: id)?(nil)
         case .recordStateChanged(let state, let active, let path):
             onRecordState?(OBSRecordState(receivedNS: receivedNS, state: state, active: active, path: path))
         case .other:
             break
+        }
+    }
+
+    /// Sends a data-less request such as `StartRecord`; `completion` receives nil on success or OBS's reason on failure.
+    public func command(_ type: String, completion: @escaping @Sendable (String?) -> Void) {
+        queue.async { [self] in
+            guard identified else { completion("OBS is not connected"); return }
+            nextID += 1
+            let id = "command-\(nextID)"
+            commands[id] = completion
+            send(OBSProtocol.request(type, id: id))
         }
     }
 

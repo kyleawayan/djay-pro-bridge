@@ -9,6 +9,7 @@ private final class FakeOBS: @unchecked Sendable {
     let queue = DispatchQueue(label: "fake.obs")
     let password: String
     var identifyAuth: String?
+    var recording = true
     var connections: [NWConnection] = []
 
     init(password: String) throws {
@@ -56,8 +57,22 @@ private final class FakeOBS: @unchecked Sendable {
                 }
                 send(#"{"op":2,"d":{"negotiatedRpcVersion":1}}"#, on: connection)
                 send(#"{"op":5,"d":{"eventType":"RecordStateChanged","eventIntent":64,"eventData":{"outputActive":true,"outputState":"OBS_WEBSOCKET_OUTPUT_STARTED","outputPath":null}}}"#, on: connection)
-            } else if object["op"] as? Int == 6, let id = d["requestId"] as? String {
-                send(#"{"op":7,"d":{"requestType":"GetRecordStatus","requestId":"\#(id)","requestStatus":{"result":true,"code":100},"responseData":{"outputActive":true,"outputPaused":false,"outputDuration":4200}}}"#, on: connection)
+            } else if object["op"] as? Int == 6, let id = d["requestId"] as? String, let type = d["requestType"] as? String {
+                switch type {
+                case "StartRecord", "StopRecord":
+                    let starting = type == "StartRecord"
+                    guard starting != recording else {
+                        send(#"{"op":7,"d":{"requestType":"\#(type)","requestId":"\#(id)","requestStatus":{"result":false,"code":500,"comment":"Output already in that state"}}}"#, on: connection)
+                        break
+                    }
+                    recording = starting
+                    send(#"{"op":7,"d":{"requestType":"\#(type)","requestId":"\#(id)","requestStatus":{"result":true,"code":100}}}"#, on: connection)
+                    let state = starting ? "OBS_WEBSOCKET_OUTPUT_STARTED" : "OBS_WEBSOCKET_OUTPUT_STOPPED"
+                    let path = starting ? "null" : #""C:\\Videos\\set.mkv""#
+                    send(#"{"op":5,"d":{"eventType":"RecordStateChanged","eventIntent":64,"eventData":{"outputActive":\#(starting),"outputState":"\#(state)","outputPath":\#(path)}}}"#, on: connection)
+                default:
+                    send(#"{"op":7,"d":{"requestType":"GetRecordStatus","requestId":"\#(id)","requestStatus":{"result":true,"code":100},"responseData":{"outputActive":\#(recording),"outputPaused":false,"outputDuration":4200}}}"#, on: connection)
+                }
             }
             receive(on: connection)
         }
@@ -108,6 +123,34 @@ final class OBSClientTests: XCTestCase {
         client.start()
         await fulfillment(of: [failed], timeout: 5)
         client.stop()
+    }
+
+    func testStartAndStopRecordReportResultsAndStateEvents() async throws {
+        let obs = try FakeOBS(password: "pw")
+        defer { obs.stop() }
+        let port = try await obs.start()
+        let client = try OBSClient(host: "127.0.0.1", port: port, password: "pw")
+        let connected = expectation(description: "connected"); connected.assertForOverFulfill = false
+        let states = Locked<[OBSRecordState]>([])
+        client.onStatus = { if $0 == .connected { connected.fulfill() } }
+        client.onRecordState = { state in states.mutate { $0.append(state) } }
+        client.start()
+        await fulfillment(of: [connected], timeout: 5)
+        func run(_ type: String) async -> String? {
+            await withCheckedContinuation { continuation in client.command(type) { continuation.resume(returning: $0) } }
+        }
+        let duplicate = await run("StartRecord")
+        XCTAssertEqual(duplicate, "Output already in that state")
+        let stopped = await run("StopRecord")
+        XCTAssertNil(stopped)
+        let started = await run("StartRecord")
+        XCTAssertNil(started)
+        for _ in 0..<100 where states.value.count < 3 { try await Task.sleep(nanoseconds: 10_000_000) }
+        client.stop()
+        XCTAssertEqual(states.value.map(\.state), ["OBS_WEBSOCKET_OUTPUT_STARTED", "OBS_WEBSOCKET_OUTPUT_STOPPED", "OBS_WEBSOCKET_OUTPUT_STARTED"])
+        XCTAssertEqual(states.value[1].path, #"C:\Videos\set.mkv"#)
+        let afterStop = await run("StartRecord")
+        XCTAssertEqual(afterStop, "OBS is not connected")
     }
 
     func testRejectsMissingAddress() {

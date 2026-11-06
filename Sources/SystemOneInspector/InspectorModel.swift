@@ -68,6 +68,13 @@ final class InspectorModel: ObservableObject {
     private var obsClient: OBSClient?
     private var obsSamples: [OBSSyncSample] = []
     private var obsLastState: OBSRecordState?
+    @Published var obsRecording = false
+    @Published var obsCommandPending = false
+    @Published var obsLinked = UserDefaults.standard.bool(forKey: "obs.linkRecording") {
+        didSet { UserDefaults.standard.set(obsLinked, forKey: "obs.linkRecording") }
+    }
+    @Published var stoppingWithOBS = false
+    private var linkedStopTimeout: DispatchWorkItem?
     @Published var selectedType: UInt64 = 51
     @Published var selectedScope: PacketScope = .deck(0)
     @Published var selectedImageIndex: UInt32 = 0
@@ -225,7 +232,9 @@ final class InspectorModel: ObservableObject {
                 DispatchQueue.main.async { [weak self] in
                     guard let self, self.obsClient === client else { return }
                     self.obsLastState = state
+                    self.obsRecording = state.active
                     if !state.active { self.obsSamples = [] }
+                    if state.state == "OBS_WEBSOCKET_OUTPUT_STOPPED" { self.finishLinkedStop() }
                 }
             }
             obsClient = client
@@ -238,9 +247,31 @@ final class InspectorModel: ObservableObject {
         }
     }
 
+    var obsConnected: Bool { obsStatus == .connected }
+
+    func toggleOBSRecording() { sendOBS(obsRecording ? "StopRecord" : "StartRecord") }
+
+    private func sendOBS(_ type: String, then: ((String?) -> Void)? = nil) {
+        guard let client = obsClient, obsConnected else {
+            error = "Connect OBS before controlling its recording."
+            then?("OBS is not connected")
+            return
+        }
+        obsCommandPending = true
+        client.command(type) { [weak self] failure in
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.obsCommandPending = false
+                if let failure { self.error = "OBS \(type) failed: \(failure)" }
+                then?(failure)
+            }
+        }
+    }
+
     func disconnectOBS() {
         obsClient?.stop()
         obsClient = nil
+        obsRecording = false
         obsStatus = .disconnected
         obsSummary = "OBS not connected"
     }
@@ -255,10 +286,12 @@ final class InspectorModel: ObservableObject {
         case .retrying(let reason): obsSummary = "Reconnecting · \(reason)"
         case .failed(let reason): obsSummary = reason; obsClient = nil
         }
+        if status != .connected { obsRecording = false }
     }
 
     private func receiveOBS(_ sample: OBSSyncSample, client: OBSClient) {
         guard obsClient === client else { return }
+        obsRecording = sample.active
         if sample.active {
             obsSamples.append(sample)
             if obsSamples.count > 300 { obsSamples.removeFirst(obsSamples.count - 300) }
@@ -291,7 +324,28 @@ final class InspectorModel: ObservableObject {
             recordingDirectory = folder
             recording = true
             recordingStatus = "Recording"
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription; return }
+        // Telemetry starts first so the sync file covers OBS's first frame and its start event.
+        guard obsLinked, !obsRecording else { return }
+        if obsConnected { sendOBS("StartRecord") }
+        else { error = "Telemetry recording started, but OBS is not connected, so OBS did not start recording." }
+    }
+
+    /// Stops OBS first when linked, so its stop event and file path land in the session before telemetry closes.
+    func stopRecordingLinked() {
+        guard recording, !stoppingWithOBS else { return }
+        guard obsLinked, obsRecording, obsConnected else { stopRecording(); return }
+        stoppingWithOBS = true
+        recordingStatus = "Stopping OBS…"
+        let timeout = DispatchWorkItem { [weak self] in self?.finishLinkedStop() }
+        linkedStopTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
+        sendOBS("StopRecord") { [weak self] failure in if failure != nil { self?.finishLinkedStop() } }
+    }
+
+    private func finishLinkedStop() {
+        guard stoppingWithOBS else { return }
+        stopRecording()
     }
 
     func chooseRecordingFolder() {
@@ -306,6 +360,8 @@ final class InspectorModel: ObservableObject {
     }
 
     func stopRecording() {
+        linkedStopTimeout?.cancel(); linkedStopTimeout = nil
+        stoppingWithOBS = false
         guard recording else { return }
         do {
             if let session { try session.stopRecording(recorder) } else { try recorder.stop() }

@@ -49,7 +49,7 @@ The debugger can align recordings with OBS running on a separate computer, such 
 1. In OBS, open **Tools → WebSocket Server Settings**, enable the server, and note the port and password.
 2. In the debugger's **OBS** row, enter the OBS computer's IP address, port and password, then press **Connect OBS**.
 3. Start telemetry recording as usual. Sync data is saved only while telemetry recording is active.
-4. Record in OBS. The status line shows the recording position, round-trip time and fit quality.
+4. Record in OBS, or press **Record in OBS** in the debugger. With **Start and stop OBS too** checked, Start Recording also starts OBS, and Stop Recording stops OBS first so its file path is saved in the session. The status line shows the recording position, round-trip time and fit quality.
 
 Once per second, the debugger asks OBS for its recording position and stamps the request and reply with the Mac's clock. The OBS computer's clock is never used. Slow round trips are discarded when fitting, so Wi-Fi works; venue networks that block device-to-device traffic do not. Use a hotspot from the OBS computer in that case. Dropped connections retry every 2 seconds until **Disconnect OBS**.
 

@@ -41,6 +41,7 @@ public enum OBSMessage: Equatable {
     case identified
     case recordStatus(requestID: String, active: Bool, paused: Bool, videoMS: Double)
     case requestFailed(requestID: String, comment: String)
+    case requestSucceeded(requestID: String)
     case recordStateChanged(state: String, active: Bool, path: String?)
     case other
 }
@@ -84,11 +85,12 @@ public enum OBSProtocol {
                   let state = event["outputState"] as? String else { return .other }
             return .recordStateChanged(state: state, active: event["outputActive"] as? Bool ?? false, path: event["outputPath"] as? String)
         case 7:
-            guard d["requestType"] as? String == "GetRecordStatus", let id = d["requestId"] as? String else { return .other }
+            guard let id = d["requestId"] as? String else { return .other }
             let status = d["requestStatus"] as? [String: Any]
             guard status?["result"] as? Bool == true else {
                 return .requestFailed(requestID: id, comment: status?["comment"] as? String ?? "code \(status?["code"] ?? "?")")
             }
+            guard d["requestType"] as? String == "GetRecordStatus" else { return .requestSucceeded(requestID: id) }
             guard let response = d["responseData"] as? [String: Any],
                   let duration = (response["outputDuration"] as? NSNumber)?.doubleValue, duration.isFinite else {
                 throw OBSProtocolError("GetRecordStatus response is missing outputDuration")

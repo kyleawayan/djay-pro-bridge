@@ -21,8 +21,10 @@ struct DashboardWindow: View {
             }
             HStack {
                 Button(model.recording ? "Stop Recording" : "Start Recording") {
-                    model.recording ? model.stopRecording() : model.startRecording()
-                }.disabled(!model.connected)
+                    model.recording ? model.stopRecordingLinked() : model.startRecording()
+                }.disabled(!model.connected || model.stoppingWithOBS)
+                Toggle("Start and stop OBS too", isOn: $model.obsLinked).toggleStyle(.checkbox)
+                    .help("Starts OBS recording after telemetry starts, and stops OBS before telemetry stops.")
                 Button("Recording Folder…", action: model.chooseRecordingFolder).disabled(model.recording)
                 Text(model.recordingStatus).foregroundStyle(model.recording ? .red : .secondary)
                 if let directory = model.recordingDirectory {
@@ -39,6 +41,8 @@ struct DashboardWindow: View {
                 Button(model.obsActive ? "Disconnect OBS" : "Connect OBS") {
                     model.obsActive ? model.disconnectOBS() : model.connectOBS()
                 }
+                Button(model.obsRecording ? "Stop OBS Recording" : "Record in OBS", action: model.toggleOBSRecording)
+                    .disabled(!model.obsConnected || model.obsCommandPending || model.stoppingWithOBS)
                 Text(model.obsSummary).lineLimit(1).truncationMode(.middle)
                     .foregroundStyle(obsColor)
                 Spacer()

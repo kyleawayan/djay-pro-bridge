@@ -36,6 +36,10 @@ final class OBSSyncTests: XCTestCase {
                        .requestFailed(requestID: "r2", comment: "no output"))
         XCTAssertEqual(try parse(#"{"op":5,"d":{"eventType":"RecordStateChanged","eventIntent":64,"eventData":{"outputActive":false,"outputState":"OBS_WEBSOCKET_OUTPUT_STOPPED","outputPath":"C:\\Videos\\set.mkv"}}}"#),
                        .recordStateChanged(state: "OBS_WEBSOCKET_OUTPUT_STOPPED", active: false, path: "C:\\Videos\\set.mkv"))
+        XCTAssertEqual(try parse(#"{"op":7,"d":{"requestType":"StartRecord","requestId":"c1","requestStatus":{"result":true,"code":100}}}"#),
+                       .requestSucceeded(requestID: "c1"))
+        XCTAssertEqual(try parse(#"{"op":7,"d":{"requestType":"StopRecord","requestId":"c2","requestStatus":{"result":false,"code":501,"comment":"Output not running"}}}"#),
+                       .requestFailed(requestID: "c2", comment: "Output not running"))
         XCTAssertEqual(try parse(#"{"op":5,"d":{"eventType":"SceneNameChanged","eventData":{}}}"#), .other)
         XCTAssertThrowsError(try parse("not json"))
     }
@@ -47,7 +51,7 @@ final class OBSSyncTests: XCTestCase {
         var generator = SystemRandomNumberGenerator()
         var samples: [OBSSyncSample] = []
         for second in 0..<7200 {
-            let mid = Double(second) + Double.random(in: 0..<0.5, using: &generator)
+            let mid = 1 + Double(second) + Double.random(in: 0..<0.5, using: &generator)
             let rtt = Double.random(in: 0.002...0.008, using: &generator) + (second % 37 == 0 ? 0.15 : 0)
             // OBS answers at an unknown point inside the round trip; up to 70% of it can be on the way there.
             let answeredAt = mid - rtt / 2 + rtt * Double.random(in: 0.3...0.7, using: &generator)
